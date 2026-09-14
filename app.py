@@ -162,7 +162,7 @@ if st.session_state.user_role is None:
 
     if st.session_state.show_admin_login:
         with st.expander("🔐 관리자 계정 인증", expanded=True):
-            col_ad1, col_ad2, col_ad3 = st.columns()
+            col_ad1, col_ad2, col_ad3 = st.columns()  # <--- 이 부분 수정됨!
             with col_ad1:
                 input_admin_id = st.text_input("관리자 아이디", key="admin_id_input")
             with col_ad2:
