@@ -320,7 +320,7 @@ elif st.session_state.user_role == "teacher":
             chosen_s_id = st.selectbox("최종 제출한 학생 선택", final_submitted_students)
             sub_info = st.session_state.submissions[chosen_s_id][selected_eval_setuk]
 
-            col_p1, col_p2 = st.columns(2)
+            col_p1, col_p2 = st.columns()
             with col_p1:
                 st.subheader(f"학번 [{chosen_s_id}] 학생 원문")
                 st.text_area("학생 작성 답안", value=sub_info["draft_text"], height=300, disabled=True, key="view_text")
