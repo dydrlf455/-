@@ -9,14 +9,21 @@ st.set_page_config(
     page_title="역사과 AI 서논술형 수행평가 시스템", page_icon="📜", layout="wide"
 )
 
+# ==========================================
+# [설정] 관리자 계정 정보 반영 완료
+# ==========================================
+ADMIN_ID = "dydrlf455"
+ADMIN_PW = "dudth0905!"
+
 # 세션 스테이트 초기화 (데이터베이스 대체)
 if "user_role" not in st.session_state:
     st.session_state.user_role = None  # 'teacher' or 'student'
 if "current_student_id" not in st.session_state:
     st.session_state.current_student_id = None
+if "show_admin_login" not in st.session_state:
+    st.session_state.show_admin_login = False
 
 if "evaluations" not in st.session_state:
-    # 기본 수행평가 예시 데이터
     st.session_state.evaluations = {
         "1970년대 산업화와 노동 현실 분석": {
             "rubric": "1. 역사적 사실(사료)의 정확한 인용 (10점)\n2. 구조적 모순(노동/환경 문제)에 대한 인과적 분석 (10점)\n3. 비판적 대안 및 역사적 통찰력 (10점)",
@@ -25,7 +32,6 @@ if "evaluations" not in st.session_state:
     }
 
 if "submissions" not in st.session_state:
-    # 학생 제출 데이터 저장소: { "학번": { "평가명": { "draft_text": "", "draft_score": 0, "draft_feedback": "", "is_final": False } } }
     st.session_state.submissions = {}
 
 # 가상 학급 명렬 (1학년 1반 예시)
@@ -37,7 +43,6 @@ if "student_list" not in st.session_state:
 def call_ai_grader(text, rubric_text):
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        # API 키가 없을 경우 모의(Mock) 응답 반환
         return {
             "score": 24,
             "deductions": "1. 사료 인용은 적절하나 구체적 통계 언급이 다소 부족함 (-3점)\n2. 노동 조건의 변화와 법적 제도 연계 분석이 평면적임 (-3점)",
@@ -101,40 +106,50 @@ def call_ai_setuk(student_name_or_id, text, score, eval_name):
 
 
 # ==========================================
-# 1. 로그인 화면
+# 1. 로그인 화면 (관리자 바로가기 배너 포함)
 # ==========================================
 if st.session_state.user_role is None:
     st.title("📜 역사과 서논술형 AI 수행평가 시스템")
-    st.markdown("### 로그인 방식을 선택하세요")
 
-    col1, col2 = st.columns(2)
+    # [상단 관리자 모드 바로가기 배너]
+    with st.container():
+        st.info("🛠️ **교사(관리자)이신가요?** 아래 버튼을 눌러 관리자 모드로 즉시 로그인할 수 있습니다.")
+        if st.button("👉 [관리자 모드 로그인하기]", type="primary", use_container_width=True):
+            st.session_state.show_admin_login = not st.session_state.show_admin_login
 
-    with col1:
-        st.subheader("👨‍🏫 교사용 로그인")
-        t_id = st.text_input("교사 아이디", key="t_id")
-        t_pw = st.text_input("비밀번호", type="password", key="t_pw")
-        if st.button("교사로 입장하기"):
-            # 교사 계정 하드코딩 검증 (id: teacher / pw: 1234)
-            if t_id == "teacher" and t_pw == "1234":
-                st.session_state.user_role = "teacher"
-                st.rerun()
-            else:
-                st.error("교사 아이디 또는 비밀번호가 일치하지 않습니다. (id: teacher / pw: 1234)")
+    # 관리자 로그인 배너를 눌렀을 때 나타나는 입력창 영역
+    if st.session_state.show_admin_login:
+        with st.expander("🔐 관리자 계정 인증", expanded=True):
+            col_ad1, col_ad2, col_ad3 = st.columns([2, 2, 1])
+            with col_ad1:
+                input_admin_id = st.text_input("관리자 아이디", key="admin_id_input")
+            with col_ad2:
+                input_admin_pw = st.text_input("관리자 비밀번호", type="password", key="admin_pw_input")
+            with col_ad3:
+                st.write("")  # 간격 맞추기용
+                st.write("")
+                if st.button("로그인 확인", key="admin_submit_btn"):
+                    if input_admin_id == ADMIN_ID and input_admin_pw == ADMIN_PW:
+                        st.session_state.user_role = "teacher"
+                        st.session_state.show_admin_login = False
+                        st.rerun()
+                    else:
+                        st.error("아이디 또는 비밀번호가 틀렸습니다. 다시 확인해 주세요.")
 
-    with col2:
-        st.subheader("🎓 학생용 로그인")
-        s_input = st.text_input(
-            "학번 입력 (예: 10105)",
-            max_chars=5,
-            help="아이디와 비밀번호 모두 학번으로 통일되어 있습니다.",
-        )
-        if st.button("학생으로 입장하기"):
-            if s_input in st.session_state.student_list:
-                st.session_state.user_role = "student"
-                st.session_state.current_student_id = s_input
-                st.rerun()
-            else:
-                st.error("등록되지 않은 학번입니다. (예시: 10101 ~ 10120)")
+    st.divider()
+    st.markdown("### 🎓 학생용 로그인")
+    s_input = st.text_input(
+        "학번 입력 (예: 10105)",
+        max_chars=5,
+        help="아이디와 비밀번호 모두 학번으로 통일되어 있습니다.",
+    )
+    if st.button("학생으로 입장하기", type="secondary"):
+        if s_input in st.session_state.student_list:
+            st.session_state.user_role = "student"
+            st.session_state.current_student_id = s_input
+            st.rerun()
+        else:
+            st.error("등록되지 않은 학번입니다. (예시: 10101 ~ 10120)")
 
 # ==========================================
 # 2. 학생용 인터페이스
@@ -147,15 +162,12 @@ elif st.session_state.user_role == "student":
         st.session_state.current_student_id = None
         st.rerun()
 
-    # 수행평가 선택
     eval_names = list(st.session_state.evaluations.keys())
     selected_eval = st.selectbox("수행평가 선택", eval_names)
     eval_info = st.session_state.evaluations[selected_eval]
 
-    # 상단 루브릭 안내
     st.info(f"📋 **[수행평가 채점 기준 (루브릭)] - {selected_eval}**\n\n{eval_info['rubric']}")
 
-    # 데이터 초기화
     if sid not in st.session_state.submissions:
         st.session_state.submissions[sid] = {}
     if selected_eval not in st.session_state.submissions[sid]:
@@ -205,7 +217,6 @@ elif st.session_state.user_role == "student":
                     st.success("최종 제출되었습니다!")
                     st.rerun()
 
-        # 가채점 결과 및 피드백 표시 영역
         if sub_data["draft_text"]:
             st.divider("### 🔍 AI 피드백 결과")
             m_col1, m_col2 = st.columns([1, 2])
@@ -221,13 +232,13 @@ elif st.session_state.user_role == "student":
 # ==========================================
 elif st.session_state.user_role == "teacher":
     st.sidebar.title("👨‍🏫 교사 모드")
+    st.sidebar.caption(f"관리자 접속 중 ({ADMIN_ID})")
     if st.sidebar.button("로그아웃"):
         st.session_state.user_role = None
         st.rerun()
 
     tab1, tab2, tab3 = st.tabs(["📊 제출 현황 대시보드", "📝 피드백 열람 및 세특 생성", "⚙️ 수행평가 및 루브릭 관리"])
 
-    # [탭 1] 대시보드
     with tab1:
         st.header("학급별 학생 제출 현황 명렬표")
         eval_names = list(st.session_state.evaluations.keys())
@@ -251,7 +262,6 @@ elif st.session_state.user_role == "teacher":
         df_status = pd.DataFrame(status_rows)
         st.dataframe(df_status, use_container_width=True)
 
-    # [탭 2] 피드백 열람 및 세특 생성
     with tab2:
         st.header("학생별 답안 열람 및 세특 초안 생성")
         eval_names = list(st.session_state.evaluations.keys())
@@ -299,7 +309,6 @@ elif st.session_state.user_role == "teacher":
                 )
                 st.caption("ℹ️ 위 초안은 오직 학생이 직접 작성한 원문만을 바탕으로 생성되었으며, 교사가 자유롭게 수정할 수 있습니다.")
 
-    # [탭 3] 관리 탭 (수행평가 추가 및 루브릭 등록)
     with tab3:
         st.header("새로운 수행평가 및 루브릭 등록")
         new_eval_name = st.text_input("수행평가명 입력", placeholder="예: 5·18 민주화 운동의 역사적 의의 서술")
