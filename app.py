@@ -235,7 +235,7 @@ elif st.session_state.user_role == "student":
             placeholder="여기에 답안을 작성하세요...",
         )
 
-        col_a, col_b = st.columns()
+        col_a, col_b = st.columns(2)
         with col_a:
             if st.button("🤖 AI 즉시 가채점 및 피드백 받기", type="secondary"):
                 if not user_essay.strip():
@@ -261,7 +261,7 @@ elif st.session_state.user_role == "student":
 
         if sub_data["draft_text"]:
             st.divider("### 🔍 AI 피드백 결과")
-            m_col1, m_col2 = st.columns()
+            m_col1, m_col2 = st.columns(2)
             with m_col1:
                 st.metric("현재 가채점 점수", f"{sub_data['draft_score']} / {eval_info['total_score']}점")
             with m_col2:
@@ -320,7 +320,7 @@ elif st.session_state.user_role == "teacher":
             chosen_s_id = st.selectbox("최종 제출한 학생 선택", final_submitted_students)
             sub_info = st.session_state.submissions[chosen_s_id][selected_eval_setuk]
 
-            col_p1, col_p2 = st.columns()
+            col_p1, col_p2 = st.columns(2)
             with col_p1:
                 st.subheader(f"학번 [{chosen_s_id}] 학생 원문")
                 st.text_area("학생 작성 답안", value=sub_info["draft_text"], height=300, disabled=True, key="view_text")
