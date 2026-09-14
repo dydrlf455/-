@@ -1,13 +1,13 @@
 import json
 import os
+import google.generativeai as genai
 import pandas as pd
 import pypdf
 import streamlit as st
-from openai import OpenAI
 
 # 페이지 기본 설정
 st.set_page_config(
-    page_title="역사과 AI 서논술형 수행평가 시스템", page_icon="📜", layout="wide"
+    page_title="역사과 AI 서논술형 수행평가 시스템 (Gemini)", page_icon="📜", layout="wide"
 )
 
 # ==========================================
@@ -15,6 +15,14 @@ st.set_page_config(
 # ==========================================
 ADMIN_ID = "dydrlf455"
 ADMIN_PW = "dudth0905!"
+
+# 제미나이 API 설정 함수
+def init_gemini():
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if api_key:
+        genai.configure(api_key=api_key)
+        return True
+    return False
 
 # 세션 스테이트 초기화 (데이터베이스 대체)
 if "user_role" not in st.session_state:
@@ -35,22 +43,31 @@ if "evaluations" not in st.session_state:
 if "submissions" not in st.session_state:
     st.session_state.submissions = {}
 
-# 가상 학급 명렬 (1학년 1반 예시)
+if "form_eval_name" not in st.session_state:
+    st.session_state.form_eval_name = "일제의 내선일체 포스터 분석 및 비판적 역사 글쓰기"
+if "form_rubric" not in st.session_state:
+    st.session_state.form_rubric = (
+        "1. 포스터 분석력 (20점)\n"
+        "2. 역사적 맥락 파악 (20점)\n"
+        "3. 비판적 사고력 (30점)\n"
+        "4. 문제 해결력 구술 발표 (10점)"
+    )
+if "form_total_score" not in st.session_state:
+    st.session_state.form_total_score = 80
+
 if "student_list" not in st.session_state:
     st.session_state.student_list = [f"101{i:02d}" for i in range(1, 21)]
 
 
-# OpenAI API 호출 함수 (Fallback 포함)
+# Gemini API 호출 함수 (가채점)
 def call_ai_grader(text, rubric_text):
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
+    if not init_gemini():
         return {
             "score": 24,
             "deductions": "1. 사료 인용은 적절하나 구체적 통계 언급이 다소 부족함 (-3점)\n2. 노동 조건의 변화와 법적 제도 연계 분석이 평면적임 (-3점)",
             "feedback": "제출한 내용은 1970년대 노동 현실의 핵심을 잘 짚었습니다. 다만 '근로기준법 준수 요구' 등 당시 구체적인 노동쟁의 사례를 덧붙이면 훨씬 설득력 있는 글이 됩니다.",
         }
 
-    client = OpenAI(api_key=api_key)
     prompt = f"""
     당신은 고등학교 역사 교사입니다. 아래의 채점 기준(루브릭)을 바탕으로 학생의 서논술형 답안을 가채점해 주세요.
     반드시 JSON 형식으로만 응답하며, 키는 'score'(숫자), 'deductions'(문자열), 'feedback'(문자열)로 구성하세요.
@@ -62,15 +79,12 @@ def call_ai_grader(text, rubric_text):
     {text}
     """
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{
-                "role": "system",
-                "content": "You are a helpful history teacher grading student essays in JSON format.",
-            }, {"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
+        model = genai.GenerativeModel(
+            model_name="gemini-2.5-flash",
+            generation_config={"response_mime_type": "application/json"}
         )
-        return json.loads(response.choices[0].message.content)
+        response = model.generate_content(prompt)
+        return json.loads(response.text)
     except Exception as e:
         return {
             "score": 20,
@@ -79,12 +93,11 @@ def call_ai_grader(text, rubric_text):
         }
 
 
+# Gemini API 호출 함수 (세특 초안 생성)
 def call_ai_setuk(student_name_or_id, text, score, eval_name):
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        return f"[{student_name_or_id}] 학생은 '{eval_name}' 수행평가에서 서논술형 글쓰기를 수행함. 당시 사료를 바탕으로 1970년대 산업화 과정에서 발생한 사회적 모순과 노동 문제를 인과적으로 분석해내는 역사적 탐구력이 돋보임. 구조적 불평등에 대한 비판적 시각을 바탕으로 역사적 성찰을 균형 있게 서술함."
+    if not init_gemini():
+        return f"[{student_name_or_id}] 학생은 '{eval_name}' 수행평가에서 서논술형 글쓰기를 수행함. 당시 사료를 바탕으로 1970년대 산업화 과정에서 발생한 사회적 모순과 노동 문제를 인과적으로 분석해내는 역사적 탐구력이 돋보임."
 
-    client = OpenAI(api_key=api_key)
     prompt = f"""
     당신은 고등학교 역사 교사입니다. 오직 아래에 제공된 [학생 원문] 내용만을 바탕으로 학교생활기록부 '세부능력 및 특기사항(세특)' 초안을 작성해 주세요.
     - 절대 환각(학생이 쓰지 않은 사실)을 지어내지 말 것.
@@ -96,17 +109,12 @@ def call_ai_setuk(student_name_or_id, text, score, eval_name):
     [학생 원문]:
     {text}
     """
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{
-            "role": "system",
-            "content": "You are a professional Korean high school history teacher writing official student records.",
-        }, {"role": "user", "content": prompt}],
-    )
-    return response.choices[0].message.content.strip()
+    model = genai.GenerativeModel(model_name="gemini-2.5-flash")
+    response = model.generate_content(prompt)
+    return response.text.strip()
 
 
-# PDF 텍스트 추출 및 AI 루브릭 자동 추출 함수
+# PDF 텍스트 추출 및 Gemini 루브릭 자동 추출 함수
 def extract_rubric_from_pdf(pdf_file):
     try:
         reader = pypdf.PdfReader(pdf_file)
@@ -116,36 +124,26 @@ def extract_rubric_from_pdf(pdf_file):
     except Exception as e:
         return None, f"PDF 읽기 오류: {str(e)}"
 
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        # API 키가 없을 때의 Mock 결과 반환
-        return {
-            "title": "PDF 자동 추출 수행평가 (모의결과)",
-            "rubric": "1. 역사적 사건의 시대적 배경 설명 (10점)\n2. 주요 인물의 입장 비교 분석 (10점)\n3. 역사적 시사점 도출 (10점)",
-            "total_score": 30,
-        }, None
+    if not init_gemini():
+        return None, "Gemini API 키가 설정되지 않았습니다. Streamlit Secrets에 GEMINI_API_KEY를 등록해 주세요."
 
-    client = OpenAI(api_key=api_key)
     prompt = f"""
     당신은 고등학교 역사 교사입니다. 아래의 [수행평가 계획서 텍스트]를 분석하여 JSON 형식으로만 답하세요.
     필수 키:
     - 'title': (문자열) 수행평가명
-    - 'rubric': (문자열) 채점 기준과 배점이 정리된 루브릭 내용 (예: "1. 항목명 (배점)\n2. 항목명 (배점)")
-    - 'total_score': (숫자) 총 배점 합계
+    - 'rubric': (문자열) 평가 요소와 배점이 정리된 루브릭 내용
+    - 'total_score': (숫자) 총 배점 합계 (숫자만)
 
     [수행평가 계획서 텍스트]:
     {extracted_text[:4000]}
     """
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{
-                "role": "system",
-                "content": "You extract assessment rubrics into JSON format.",
-            }, {"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
+        model = genai.GenerativeModel(
+            model_name="gemini-2.5-flash",
+            generation_config={"response_mime_type": "application/json"}
         )
-        data = json.loads(response.choices[0].message.content)
+        response = model.generate_content(prompt)
+        data = json.loads(response.text)
         return data, None
     except Exception as e:
         return None, f"AI 분석 오류: {str(e)}"
@@ -155,7 +153,7 @@ def extract_rubric_from_pdf(pdf_file):
 # 1. 로그인 화면 (관리자 바로가기 배너 포함)
 # ==========================================
 if st.session_state.user_role is None:
-    st.title("📜 역사과 서논술형 AI 수행평가 시스템")
+    st.title("📜 역사과 서논술형 AI 수행평가 시스템 (Gemini)")
 
     with st.container():
         st.info("🛠️ **교사(관리자)이신가요?** 아래 버튼을 눌러 관리자 모드로 즉시 로그인할 수 있습니다.")
@@ -164,7 +162,7 @@ if st.session_state.user_role is None:
 
     if st.session_state.show_admin_login:
         with st.expander("🔐 관리자 계정 인증", expanded=True):
-            col_ad1, col_ad2, col_ad3 = st.columns([2, 2, 1])
+            col_ad1, col_ad2, col_ad3 = st.columns()
             with col_ad1:
                 input_admin_id = st.text_input("관리자 아이디", key="admin_id_input")
             with col_ad2:
@@ -237,7 +235,7 @@ elif st.session_state.user_role == "student":
             placeholder="여기에 답안을 작성하세요...",
         )
 
-        col_a, col_b = st.columns([1, 1])
+        col_a, col_b = st.columns()
         with col_a:
             if st.button("🤖 AI 즉시 가채점 및 피드백 받기", type="secondary"):
                 if not user_essay.strip():
@@ -263,7 +261,7 @@ elif st.session_state.user_role == "student":
 
         if sub_data["draft_text"]:
             st.divider("### 🔍 AI 피드백 결과")
-            m_col1, m_col2 = st.columns([1, 2])
+            m_col1, m_col2 = st.columns()
             with m_col1:
                 st.metric("현재 가채점 점수", f"{sub_data['draft_score']} / {eval_info['total_score']}점")
             with m_col2:
@@ -356,9 +354,6 @@ elif st.session_state.user_role == "teacher":
     with tab3:
         st.header("새로운 수행평가 및 루브릭 등록")
 
-        # ----------------------------------------------------
-        # [추가 기능] PDF 파일 업로드로 루브릭 자동 추출 섹션
-        # ----------------------------------------------------
         with st.expander("📄 PDF 파일 업로드로 루브릭 자동 생성하기", expanded=True):
             uploaded_pdf = st.file_uploader("수행평가 계획서(PDF) 업로드", type=["pdf"])
             if uploaded_pdf is not None:
@@ -368,34 +363,28 @@ elif st.session_state.user_role == "teacher":
                         if err:
                             st.error(err)
                         else:
-                            st.session_state["temp_eval_name"] = extracted_data.get("title", "")
-                            st.session_state["temp_rubric"] = extracted_data.get("rubric", "")
-                            st.session_state["temp_total_score"] = int(extracted_data.get("total_score", 30))
-                            st.success("✅ PDF 분석이 완료되었습니다! 아래 수동 입력 폼에 내용이 자동 반영되었습니다.")
+                            st.session_state.form_eval_name = extracted_data.get("title", st.session_state.form_eval_name)
+                            st.session_state.form_rubric = extracted_data.get("rubric", st.session_state.form_rubric)
+                            st.session_state.form_total_score = int(extracted_data.get("total_score", st.session_state.form_total_score))
+                            st.rerun()
 
         st.divider()
 
-        # 수동 입력 폼 (PDF 분석 결과가 여기로 자동 연동됨)
-        default_name = st.session_state.get("temp_eval_name", "")
-        default_rubric = st.session_state.get("temp_rubric", "")
-        default_score = st.session_state.get("temp_total_score", 30)
-
-        new_eval_name = st.text_input("수행평가명 입력", value=default_name, placeholder="예: 5·18 민주화 운동의 역사적 의의 서술")
+        new_eval_name = st.text_input("수행평가명 입력", key="form_eval_name", placeholder="예: 5·18 민주화 운동의 역사적 의의 서술")
         new_rubric = st.text_area(
             "루브릭(평가 요소, 채점 기준, 배점) 등록",
-            value=default_rubric,
-            placeholder="1. 사료 해석의 객관성 (10점)\n2. 역사적 인과관계 파악 (10점)\n3. 민주주의 가치에 대한 성찰 (10점)",
+            key="form_rubric",
+            placeholder="1. 사료 해석의 객관성 (20점)\n2. 역사적 인과관계 파악 (20점)",
             height=150,
         )
-        new_total_score = st.number_input("총 배점", min_value=10, max_value=100, value=default_score, step=5)
+        new_total_score = st.number_input("총 배점", min_value=10, max_value=100, key="form_total_score", step=5)
 
         if st.button("수행평가 등록하기", type="primary"):
-            if new_eval_name and new_rubric:
-                st.session_state.evaluations[new_eval_name] = {
-                    "rubric": new_rubric,
+            if new_eval_name.strip() and new_rubric.strip():
+                st.session_state.evaluations[new_eval_name.strip()] = {
+                    "rubric": new_rubric.strip(),
                     "total_score": new_total_score,
                 }
-                st.success(f"'{new_eval_name}' 수행평가가 성공적으로 등록되었습니다!")
-                st.rerun()
+                st.success(f"'{new_eval_name.strip()}' 수행평가가 성공적으로 등록되었습니다!")
             else:
                 st.warning("수행평가명과 루브릭을 모두 입력해 주세요.")
