@@ -1,6 +1,7 @@
 import json
 import os
 import pandas as pd
+import pypdf
 import streamlit as st
 from openai import OpenAI
 
@@ -10,7 +11,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# [설정] 관리자 계정 정보 반영 완료
+# [설정] 관리자 계정 정보
 # ==========================================
 ADMIN_ID = "dydrlf455"
 ADMIN_PW = "dudth0905!"
@@ -105,19 +106,62 @@ def call_ai_setuk(student_name_or_id, text, score, eval_name):
     return response.choices[0].message.content.strip()
 
 
+# PDF 텍스트 추출 및 AI 루브릭 자동 추출 함수
+def extract_rubric_from_pdf(pdf_file):
+    try:
+        reader = pypdf.PdfReader(pdf_file)
+        extracted_text = ""
+        for page in reader.pages:
+            extracted_text += page.extract_text() or ""
+    except Exception as e:
+        return None, f"PDF 읽기 오류: {str(e)}"
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        # API 키가 없을 때의 Mock 결과 반환
+        return {
+            "title": "PDF 자동 추출 수행평가 (모의결과)",
+            "rubric": "1. 역사적 사건의 시대적 배경 설명 (10점)\n2. 주요 인물의 입장 비교 분석 (10점)\n3. 역사적 시사점 도출 (10점)",
+            "total_score": 30,
+        }, None
+
+    client = OpenAI(api_key=api_key)
+    prompt = f"""
+    당신은 고등학교 역사 교사입니다. 아래의 [수행평가 계획서 텍스트]를 분석하여 JSON 형식으로만 답하세요.
+    필수 키:
+    - 'title': (문자열) 수행평가명
+    - 'rubric': (문자열) 채점 기준과 배점이 정리된 루브릭 내용 (예: "1. 항목명 (배점)\n2. 항목명 (배점)")
+    - 'total_score': (숫자) 총 배점 합계
+
+    [수행평가 계획서 텍스트]:
+    {extracted_text[:4000]}
+    """
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{
+                "role": "system",
+                "content": "You extract assessment rubrics into JSON format.",
+            }, {"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+        )
+        data = json.loads(response.choices[0].message.content)
+        return data, None
+    except Exception as e:
+        return None, f"AI 분석 오류: {str(e)}"
+
+
 # ==========================================
 # 1. 로그인 화면 (관리자 바로가기 배너 포함)
 # ==========================================
 if st.session_state.user_role is None:
     st.title("📜 역사과 서논술형 AI 수행평가 시스템")
 
-    # [상단 관리자 모드 바로가기 배너]
     with st.container():
         st.info("🛠️ **교사(관리자)이신가요?** 아래 버튼을 눌러 관리자 모드로 즉시 로그인할 수 있습니다.")
         if st.button("👉 [관리자 모드 로그인하기]", type="primary", use_container_width=True):
             st.session_state.show_admin_login = not st.session_state.show_admin_login
 
-    # 관리자 로그인 배너를 눌렀을 때 나타나는 입력창 영역
     if st.session_state.show_admin_login:
         with st.expander("🔐 관리자 계정 인증", expanded=True):
             col_ad1, col_ad2, col_ad3 = st.columns([2, 2, 1])
@@ -126,7 +170,7 @@ if st.session_state.user_role is None:
             with col_ad2:
                 input_admin_pw = st.text_input("관리자 비밀번호", type="password", key="admin_pw_input")
             with col_ad3:
-                st.write("")  # 간격 맞추기용
+                st.write("")
                 st.write("")
                 if st.button("로그인 확인", key="admin_submit_btn"):
                     if input_admin_id == ADMIN_ID and input_admin_pw == ADMIN_PW:
@@ -311,14 +355,41 @@ elif st.session_state.user_role == "teacher":
 
     with tab3:
         st.header("새로운 수행평가 및 루브릭 등록")
-        new_eval_name = st.text_input("수행평가명 입력", placeholder="예: 5·18 민주화 운동의 역사적 의의 서술")
+
+        # ----------------------------------------------------
+        # [추가 기능] PDF 파일 업로드로 루브릭 자동 추출 섹션
+        # ----------------------------------------------------
+        with st.expander("📄 PDF 파일 업로드로 루브릭 자동 생성하기", expanded=True):
+            uploaded_pdf = st.file_uploader("수행평가 계획서(PDF) 업로드", type=["pdf"])
+            if uploaded_pdf is not None:
+                if st.button("🤖 AI로 PDF 분석하여 루브릭 채우기"):
+                    with st.spinner("PDF 파일을 읽고 루브릭과 배점을 분석하고 있습니다..."):
+                        extracted_data, err = extract_rubric_from_pdf(uploaded_pdf)
+                        if err:
+                            st.error(err)
+                        else:
+                            st.session_state["temp_eval_name"] = extracted_data.get("title", "")
+                            st.session_state["temp_rubric"] = extracted_data.get("rubric", "")
+                            st.session_state["temp_total_score"] = int(extracted_data.get("total_score", 30))
+                            st.success("✅ PDF 분석이 완료되었습니다! 아래 수동 입력 폼에 내용이 자동 반영되었습니다.")
+
+        st.divider()
+
+        # 수동 입력 폼 (PDF 분석 결과가 여기로 자동 연동됨)
+        default_name = st.session_state.get("temp_eval_name", "")
+        default_rubric = st.session_state.get("temp_rubric", "")
+        default_score = st.session_state.get("temp_total_score", 30)
+
+        new_eval_name = st.text_input("수행평가명 입력", value=default_name, placeholder="예: 5·18 민주화 운동의 역사적 의의 서술")
         new_rubric = st.text_area(
             "루브릭(평가 요소, 채점 기준, 배점) 등록",
+            value=default_rubric,
             placeholder="1. 사료 해석의 객관성 (10점)\n2. 역사적 인과관계 파악 (10점)\n3. 민주주의 가치에 대한 성찰 (10점)",
+            height=150,
         )
-        new_total_score = st.number_input("총 배점", min_value=10, max_value=100, value=30, step=5)
+        new_total_score = st.number_input("총 배점", min_value=10, max_value=100, value=default_score, step=5)
 
-        if st.button("수행평가 등록하기"):
+        if st.button("수행평가 등록하기", type="primary"):
             if new_eval_name and new_rubric:
                 st.session_state.evaluations[new_eval_name] = {
                     "rubric": new_rubric,
