@@ -89,6 +89,94 @@ def call_ai_grading(student_text, rubric_text, api_key=None):
         model = genai.GenerativeModel("gemini-2.5-flash")
         response = model.generate_content(prompt)
         content = response.text.strip()
+        
+        # ⚠️ 이 부분이 오류가 났던 곳입니다 (한 줄로 깔끔하게 처리)
         if content.startswith("```json"):
             content = content[7:-3].strip()
-        elif content.startswith("
+        elif content.startswith("```"):
+            content = content[3:-3].strip()
+            
+        return json.loads(content)
+    except Exception as e:
+        return {
+            "score": 0.0,
+            "deduction": f"AI 분석 중 오류 발생: {str(e)}",
+            "comment": "API 키를 확인하거나 잠시 후 다시 시도해 주세요.",
+            "is_mock": True
+        }
+
+def call_ai_seteuk(student_text, score, assessment_name, api_key=None):
+    prompt = f"""
+당신은 고등학교 역사 교사입니다. 2022 개정 교육과정 역사과 성취기준 및 핵심 역량(역사적 사고력, 역사적 탐구 및 소통력 등)을 바탕으로 아래 학생의 세부능력 및 특기사항(세특) 초안을 작성해 주세요.
+
+[절대 규칙 - 환각 배제]
+1. 아래 제공된 [학생 원문 내용]에 명시적으로 드러난 사실, 역사적 개념, 탐구 내용만을 기반으로 작성할 것.
+2. 학생 원문에 없는 내용은 절대 지어내지 말 것.
+3. 분량은 학교생활기록부 기재 요령에 맞게 500바이트 내외(3~5문장)로 간결하게 서술할 것.
+
+[수행평가명]: {assessment_name}
+[획득 점수]: {score}점
+[학생 원문 내용]:
+{student_text}
+"""
+    if not GENAI_AVAILABLE or not api_key:
+        return f"[모의 세특 생성 결과] ({assessment_name} / {score}점 기반)\n수행평가 과정에서 해당 역사적 주제에 대한 뛰어난 탐구력과 균형 잡힌 시각을 보여줌. 역사적 사실을 정확하게 이해하고 논리적으로 서술하는 역량이 우수함."
+
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        return f"세특 생성 중 오류 발생: {str(e)}"
+
+# ==========================================
+# [사이드바: 로그인 및 환경설정]
+# ==========================================
+with st.sidebar:
+    st.header("🔑 로그인 및 설정")
+    api_key_input = st.text_input("구글 AI 스튜디오 API 키 (Gemini API Key, 선택입력)", type="password", help="입력하지 않으면 기본 모의 AI 엔진이 작동합니다.")
+    if api_key_input:
+        os.environ["GEMINI_API_KEY"] = api_key_input
+
+    st.divider()
+
+    if not st.session_state.logged_in:
+        login_type = st.radio("로그인 유형 선택", ["학생 로그인", "교사 로그인", "👑 관리자 로그인"])
+        
+        if login_type == "학생 로그인":
+            st.caption("아이디와 비밀번호 모두 '학번'으로 입력하세요. (예: 10101)")
+            s_id = st.text_input("학번 입력")
+            s_pw = st.text_input("비밀번호 입력", type="password")
+            
+            if st.button("학생 입장하기"):
+                if s_id in st.session_state.student_credentials and st.session_state.student_credentials[s_id] == s_pw:
+                    st.session_state.logged_in = True
+                    st.session_state.user_role = "student"
+                    st.session_state.user_id = s_id
+                    st.rerun()
+                else:
+                    st.error("학번과 비밀번호를 확인해 주세요. (미등록 학생일 수 있습니다)")
+        
+        elif login_type == "교사 로그인":
+            t_id = st.text_input("교사 아이디")
+            t_pw = st.text_input("교사 비밀번호", type="password")
+            if st.button("교사 입장하기"):
+                if t_id == st.session_state.teacher_credentials["id"] and t_pw == st.session_state.teacher_credentials["pw"]:
+                    st.session_state.logged_in = True
+                    st.session_state.user_role = "teacher"
+                    st.session_state.user_id = t_id
+                    st.rerun()
+                else:
+                    st.error("교사 인증 정보가 일치하지 않습니다.")
+
+        elif login_type == "👑 관리자 로그인":
+            a_id = st.text_input("관리자 아이디")
+            a_pw = st.text_input("관리자 비밀번호", type="password")
+            if st.button("관리자 입장하기"):
+                if a_id == "dydrlf455" and a_pw == "dudth0905!":
+                    st.session_state.logged_in = True
+                    st.session_state.user_role = "admin"
+                    st.session_state.user_id = "SuperAdmin"
+                    st.rerun()
+                else:
