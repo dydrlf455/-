@@ -86,7 +86,8 @@ def call_ai_grading(student_text, rubric_text, api_key=None):
     
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        # ⚠️ 모델명을 현재 사용 가능한 'gemini-1.5-flash'로 교체
+        model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)
         content = response.text.strip()
         
@@ -125,7 +126,8 @@ def call_ai_seteuk(student_text, score, assessment_name, api_key=None):
 
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        # ⚠️ 모델명을 현재 사용 가능한 'gemini-1.5-flash'로 교체
+        model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
@@ -376,7 +378,6 @@ elif st.session_state.user_role == "teacher":
             selected_assess_t = st.selectbox("조회할 수행평가 선택", assess_names, key="dash_select")
 
             table_rows = []
-            # 학생 데이터베이스 기반으로 목록 호출
             current_students = sorted(list(st.session_state.student_credentials.keys()))
             for sid in current_students:
                 sub_info = st.session_state.student_submissions.get(sid, {}).get(selected_assess_t, None)
