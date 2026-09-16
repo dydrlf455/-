@@ -2,6 +2,14 @@ import os
 import streamlit as st
 import pandas as pd
 import json
+from io import BytesIO
+
+# PDF 추출을 위한 pypdf 라이브러리 안전 Import
+try:
+    from pypdf import PdfReader
+    PYPDF_AVAILABLE = True
+except ImportError:
+    PYPDF_AVAILABLE = False
 
 # 구글 제미나이(Gemini) 라이브러리 안전 Import
 try:
@@ -13,7 +21,7 @@ except ImportError:
 # ==========================================
 # [기본 설정 및 세션 스테이트 초기화]
 # ==========================================
-st.set_page_config(page_title="역사과 AI 서논술형 수행평가 시스템 (Gemini)", layout="wide")
+st.set_page_config(page_title="역사과 AI 서논술형 수행평가 시스템 (PDF 연동)", layout="wide")
 
 # 교사 계정 정보 (하드코딩)
 TEACHER_CREDENTIALS = {"id": "history_teacher", "pw": "2026"}
@@ -63,7 +71,7 @@ def call_ai_grading(student_text, rubric_text, api_key=None):
   "comment": "(학생에게 건네는 격려 및 보완 가이드 코멘트)"
 }}
 """
-    if not GENAI_AVAILABLE or not api_key:
+    ifnot GENAI_AVAILABLE or not api_key:
         return {
             "score": 8.0,
             "deduction": "1970년대 구체적인 사건이나 법적 제도적 한계에 대한 언급이 조금 더 구체적이면 좋습니다.",
@@ -165,13 +173,8 @@ with st.sidebar:
 # [메인 화면 분기]
 # ==========================================
 if not st.session_state.logged_in:
-    st.title("📚 역사과 서논술형 AI 수행평가 플랫폼 (Gemini 엔진)")
+    st.title("📚 역사과 서논술형 AI 수행평가 플랫폼")
     st.info("👈 왼쪽 사이드바에서 **학생 로그인** 또는 **교사 로그인**을 진행해 주세요.")
-    st.markdown("""
-    ### 🌟 시스템 주요 기능
-    * **학생용**: 루브릭 확인 ➡️ 글 작성 후 AI 실시간 가채점 및 피드백 ➡️ 확신이 서면 **최종 제출**
-    * **교사용**: 수행평가 루브릭 관리 ➡️ 학급별 제출 현황 대시보드 확인 ➡️ 2022 개정 교육과정 기반 **AI 세특 초안 자동 생성**
-    """)
 
 elif st.session_state.user_role == "student":
     student_id = st.session_state.user_id
@@ -255,7 +258,7 @@ elif st.session_state.user_role == "teacher":
     
     tab_dashboard, tab_management, tab_seteuk = st.tabs([
         "📋 학급별 제출 대시보드", 
-        "⚙️ 수행평가 및 루브릭 관리", 
+        "⚙️ 수행평가 및 루브릭 관리 (PDF 업로드 지원)", 
         "✨ 세특 초안 생성 및 열람"
     ])
 
@@ -288,12 +291,45 @@ elif st.session_state.user_role == "teacher":
         st.dataframe(df_status, use_container_width=True, hide_index=True)
 
     with tab_management:
-        st.subheader("새로운 수행평가 및 루브릭 등록")
+        st.subheader("📁 수행평가 및 루브릭 등록 (PDF 업로드 기능 포함)")
+        
+        # 세션에 임시로 저장할 PDF 추출 텍스트 관리
+        if "extracted_pdf_text" not in st.session_state:
+            st.session_state.extracted_pdf_text = ""
+
+        # PDF 파일 업로더 추가
+        uploaded_pdf = st.file_uploader("채점 기준(루브릭)이 담긴 PDF 파일을 업로드하세요.", type=["pdf"])
+        
+        if uploaded_pdf is not None:
+            if PYPDF_AVAILABLE:
+                try:
+                    reader = PdfReader(BytesIO(uploaded_pdf.read()))
+                    extracted_text = ""
+                    for page in reader.pages:
+                        text = page.extract_text()
+                        if text:
+                            extracted_text += text + "\n"
+                    
+                    if extracted_text.strip():
+                        st.session_state.extracted_pdf_text = extracted_text.strip()
+                        st.success("PDF 파일에서 채점 기준 텍스트를 성공적으로 추출했습니다! 아래 입력창에 자동으로 반영되었습니다.")
+                    else:
+                        st.warning("PDF에서 텍스트를 추출하지 못했습니다. (이미지 형태의 PDF일 수 있습니다.)")
+                except Exception as e:
+                    st.error(f"PDF 파일 읽기 오류: {str(e)}")
+            else:
+                st.error("pypdf 라이브러리가 설치되지 않았습니다.")
+
+        # 등록 폼
         with st.form("new_assessment_form"):
-            new_title = st.text_input("수행평가명", placeholder="예: 3.15 의거의 역사적 의의 서술")
+            new_title = st.text_input("수행평가명", placeholder="예: 5·18 민주 운동의 역사적 의의 서술")
             new_max_score = st.number_input("만점 점수", min_value=1, max_value=100, value=10)
-            new_rubric = st.text_area("루브릭 채점 기준 입력", height=150, placeholder="평가 요소별 배점 및 세부 기준을 작성하세요.")
-            submitted_new = st.form_submit_button("수행평가 등록")
+            
+            # 텍스트 에어리어의 기본값을 PDF에서 추출한 텍스트로 설정
+            default_rubric_content = st.session_state.extracted_pdf_text if st.session_state.extracted_pdf_text else "평가 요소별 배점 및 세부 기준을 직접 입력하거나 위에서 PDF를 업로드하세요."
+            new_rubric = st.text_area("루브릭 채점 기준 (PDF 업로드 시 자동 입력됨)", value=default_rubric_content, height=200)
+            
+            submitted_new = st.form_submit_button("수행평가 최종 등록")
             
             if submitted_new:
                 if new_title and new_rubric:
@@ -301,12 +337,15 @@ elif st.session_state.user_role == "teacher":
                         "rubric": new_rubric,
                         "max_score": new_max_score
                     }
-                    st.success(f"'{new_title}' 수행평가가 등록되었습니다!")
+                    # 등록 후 임시 추출 텍스트 초기화
+                    st.session_state.extracted_pdf_text = ""
+                    st.success(f"'{new_title}' 수행평가가 성공적으로 등록되었습니다!")
                     st.rerun()
                 else:
-                    st.warning("내용을 모두 입력해 주세요.")
+                    st.warning("수행평가명과 루브릭 내용을 모두 입력해 주세요.")
         
         st.divider()
+        st.markdown("### 📋 현재 등록된 수행평가 목록")
         for title, info in st.session_state.assessments.items():
             with st.expander(f"📁 {title} (만점: {info['max_score']}점)"):
                 st.markdown(info["rubric"])
@@ -322,7 +361,7 @@ elif st.session_state.user_role == "teacher":
         ]
 
         if not submitted_students:
-            st.info("아직 최종 제출을 완료한 학생이 없습니다. (학생 계정으로 로그인 후 테스트해 보세요)")
+            st.info("아직 최종 제출을 완료한 학생이 없습니다.")
         else:
             chosen_student = st.selectbox("최종 제출한 학생 선택 (학번)", submitted_students)
             student_work = st.session_state.student_submissions[chosen_student][selected_assess_s]
@@ -355,4 +394,3 @@ elif st.session_state.user_role == "teacher":
                 if st.button("💾 세특 수정사항 저장"):
                     student_work["se-teuk"] = edited_seteuk
                     st.success("세특 내용이 저장되었습니다!")
-
