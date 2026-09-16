@@ -71,7 +71,7 @@ def call_ai_grading(student_text, rubric_text, api_key=None):
   "comment": "(학생에게 건네는 격려 및 보완 가이드 코멘트)"
 }}
 """
-    ifnot GENAI_AVAILABLE or not api_key:
+  if not GENAI_AVAILABLE or not api_key:
         return {
             "score": 8.0,
             "deduction": "1970년대 구체적인 사건이나 법적 제도적 한계에 대한 언급이 조금 더 구체적이면 좋습니다.",
