@@ -19,6 +19,30 @@ except ImportError:
     GENAI_AVAILABLE = False
 
 # ==========================================
+# [데이터 파일 저장/불러오기 기능 설정]
+# ==========================================
+DATA_FILE = "school_app_data.json"
+
+def load_data():
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return None
+    return None
+
+def save_data():
+    data = {
+        "teacher_credentials": st.session_state.teacher_credentials,
+        "student_credentials": st.session_state.student_credentials,
+        "assessments": st.session_state.assessments,
+        "student_submissions": st.session_state.student_submissions
+    }
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+# ==========================================
 # [기본 설정 및 세션 스테이트 초기화]
 # ==========================================
 st.set_page_config(page_title="역사과 AI 서논술형 수행평가 시스템", layout="wide")
@@ -26,34 +50,43 @@ st.set_page_config(page_title="역사과 AI 서논술형 수행평가 시스템"
 # 권한 및 계정 세션 초기화
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
-    st.session_state.user_role = None  # 'admin', 'teacher', or 'student'
+    st.session_state.user_role = None
     st.session_state.user_id = None
-    st.session_state.original_role = None  # 관리자가 다른 권한으로 테스트 진입 시 복귀용
+    st.session_state.original_role = None
 
-# 계정 데이터 관리 (관리자 모드에서 수정 가능하도록 세션으로 이동)
-if "teacher_credentials" not in st.session_state:
-    st.session_state.teacher_credentials = {"id": "history_teacher", "pw": "2026"}
+# 저장된 데이터 불러오기
+app_data = load_data()
 
-if "student_credentials" not in st.session_state:
-    # 기본 학생 명단 초기화 (10101 ~ 10120, 초기 비번은 학번과 동일)
-    st.session_state.student_credentials = {f"101{str(i).zfill(2)}": f"101{str(i).zfill(2)}" for i in range(1, 21)}
-
-# 과제 및 루브릭 데이터 저장소
-if "assessments" not in st.session_state:
-    st.session_state.assessments = {
-        "1970년대 산업화와 노동 현실 분석": {
-            "rubric": """
-            [만점: 10점]
-            1. 역사적 사실의 정확성 (3점): 1970년대 경제개발과 노동 환경의 구체적 사실 언급 여부
-            2. 관점의 균형성 및 비판적 사고 (4점): 경제적 성과와 그 이면에 존재했던 노동자의 고통을 균형 있게 분석했는가?
-            3. 문맥적 이해 및 결론 도출 (3점): 제시된 사료와 연계하여 역사적 의미를 도출했는가?
-            """,
-            "max_score": 10
+if app_data:
+    if "teacher_credentials" not in st.session_state:
+        st.session_state.teacher_credentials = app_data.get("teacher_credentials")
+    if "student_credentials" not in st.session_state:
+        st.session_state.student_credentials = app_data.get("student_credentials")
+    if "assessments" not in st.session_state:
+        st.session_state.assessments = app_data.get("assessments")
+    if "student_submissions" not in st.session_state:
+        st.session_state.student_submissions = app_data.get("student_submissions")
+else:
+    # 최초 실행 시 기본 데이터 생성
+    if "teacher_credentials" not in st.session_state:
+        st.session_state.teacher_credentials = {"id": "history_teacher", "pw": "2026"}
+    if "student_credentials" not in st.session_state:
+        st.session_state.student_credentials = {f"101{str(i).zfill(2)}": f"101{str(i).zfill(2)}" for i in range(1, 21)}
+    if "assessments" not in st.session_state:
+        st.session_state.assessments = {
+            "1970년대 산업화와 노동 현실 분석": {
+                "rubric": """
+                [만점: 10점]
+                1. 역사적 사실의 정확성 (3점): 1970년대 경제개발과 노동 환경의 구체적 사실 언급 여부
+                2. 관점의 균형성 및 비판적 사고 (4점): 경제적 성과와 그 이면에 존재했던 노동자의 고통을 균형 있게 분석했는가?
+                3. 문맥적 이해 및 결론 도출 (3점): 제시된 사료와 연계하여 역사적 의미를 도출했는가?
+                """,
+                "max_score": 10
+            }
         }
-    }
-
-if "student_submissions" not in st.session_state:
-    st.session_state.student_submissions = {}
+    if "student_submissions" not in st.session_state:
+        st.session_state.student_submissions = {}
+    save_data() # 초기 데이터 저장
 
 # ==========================================
 # [구글 Gemini AI 연동 함수 정의]
@@ -86,12 +119,10 @@ def call_ai_grading(student_text, rubric_text, api_key=None):
     
     try:
         genai.configure(api_key=api_key)
-        # ⚠️ 모델명을 현재 사용 가능한 'gemini-1.5-flash'로 교체
         model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)
         content = response.text.strip()
         
-        # 복사 오류 방지를 위해 백틱 우회 처리
         backticks = "`" * 3
         if content.startswith(f"{backticks}json"):
             content = content[7:-3].strip()
@@ -126,7 +157,6 @@ def call_ai_seteuk(student_text, score, assessment_name, api_key=None):
 
     try:
         genai.configure(api_key=api_key)
-        # ⚠️ 모델명을 현재 사용 가능한 'gemini-1.5-flash'로 교체
         model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)
         return response.text.strip()
@@ -188,7 +218,6 @@ with st.sidebar:
     else:
         st.success(f"현재 접속자: **{st.session_state.user_id}** ({st.session_state.user_role})")
         
-        # 관리자가 다른 권한으로 테스트 중일 때 복귀 버튼 표시
         if st.session_state.original_role == "admin":
             if st.button("👑 관리자 모드로 복귀", type="primary"):
                 st.session_state.user_role = "admin"
@@ -226,6 +255,7 @@ elif st.session_state.user_role == "admin":
         if st.button("교사 계정 업데이트"):
             st.session_state.teacher_credentials["id"] = new_t_id
             st.session_state.teacher_credentials["pw"] = new_t_pw
+            save_data() # 변경사항 파일 저장
             st.success("교사 계정 정보가 성공적으로 변경되었습니다.")
         
         st.divider()
@@ -240,6 +270,7 @@ elif st.session_state.user_role == "admin":
         if st.button("학생 계정 저장/추가"):
             if m_s_id and m_s_pw:
                 st.session_state.student_credentials[m_s_id] = m_s_pw
+                save_data() # 변경사항 파일 저장
                 st.success(f"학번 '{m_s_id}' 학생 계정이 저장되었습니다.")
             else:
                 st.warning("학번과 비밀번호를 모두 입력해 주세요.")
@@ -331,6 +362,7 @@ elif st.session_state.user_role == "student":
                             sub_data["score"] = ai_result.get("score", 0)
                             sub_data["deduction"] = ai_result.get("deduction", "")
                             sub_data["comment"] = ai_result.get("comment", "")
+                            save_data() # 작성 및 피드백 내용 파일 저장
                             st.rerun()
 
             with col2:
@@ -344,6 +376,7 @@ elif st.session_state.user_role == "student":
                         sub_data["deduction"] = ai_result.get("deduction", "")
                         sub_data["comment"] = ai_result.get("comment", "")
                         sub_data["status"] = "submitted"
+                        save_data() # 최종 제출 상태 파일 저장
                         st.success("성공적으로 최종 제출되었습니다!")
                         st.rerun()
 
@@ -445,6 +478,7 @@ elif st.session_state.user_role == "teacher":
                         "max_score": new_max_score
                     }
                     st.session_state.extracted_pdf_text = ""
+                    save_data() # 새 수행평가 등록 시 파일 저장
                     st.success(f"'{new_title}' 수행평가가 성공적으로 등록되었습니다!")
                     st.rerun()
                 else:
@@ -492,6 +526,7 @@ elif st.session_state.user_role == "teacher":
                                 os.environ.get("GEMINI_API_KEY")
                             )
                             student_work["se-teuk"] = generated_text
+                            save_data() # 세특 자동 생성 결과 파일 저장
                             st.rerun()
 
                     edited_seteuk = st.text_area(
@@ -502,4 +537,5 @@ elif st.session_state.user_role == "teacher":
 
                     if st.button("💾 세특 수정사항 저장"):
                         student_work["se-teuk"] = edited_seteuk
+                        save_data() # 세특 수동 편집 결과 파일 저장
                         st.success("세특 내용이 저장되었습니다!")
