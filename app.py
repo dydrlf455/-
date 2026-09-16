@@ -96,24 +96,6 @@ def call_ai_grading(student_text, rubric_text, api_key=None):
             "comment": "API 키를 확인하거나 잠시 후 다시 시도해 주세요.",
             "is_mock": True
         }
-    
-    try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash")
-        response = model.generate_content(prompt)
-        content = response.text.strip()
-        if content.startswith("```json"):
-            content = content[7:-3].strip()
-        elif content.startswith("```"):
-            content = content[3:-3].strip()
-        return json.loads(content)
-    except Exception as e:
-        return {
-            "score": 0.0,
-            "deduction": f"AI 분석 중 오류 발생: {str(e)}",
-            "comment": "API 키를 확인하거나 잠시 후 다시 시도해 주세요.",
-            "is_mock": True
-        }
 
 def call_ai_seteuk(student_text, score, assessment_name, api_key=None):
     prompt = f"""
