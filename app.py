@@ -47,14 +47,12 @@ def save_data():
 # ==========================================
 st.set_page_config(page_title="역사과 AI 서논술형 수행평가 시스템", layout="wide")
 
-# 권한 및 계정 세션 초기화
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_role = None
     st.session_state.user_id = None
     st.session_state.original_role = None
 
-# 저장된 데이터 불러오기
 app_data = load_data()
 
 if app_data:
@@ -67,7 +65,6 @@ if app_data:
     if "student_submissions" not in st.session_state:
         st.session_state.student_submissions = app_data.get("student_submissions")
 else:
-    # 최초 실행 시 기본 데이터 생성
     if "teacher_credentials" not in st.session_state:
         st.session_state.teacher_credentials = {"id": "history_teacher", "pw": "2026"}
     if "student_credentials" not in st.session_state:
@@ -86,7 +83,7 @@ else:
         }
     if "student_submissions" not in st.session_state:
         st.session_state.student_submissions = {}
-    save_data() # 초기 데이터 저장
+    save_data()
 
 # ==========================================
 # [구글 Gemini AI 연동 함수 정의]
@@ -119,7 +116,8 @@ def call_ai_grading(student_text, rubric_text, api_key=None):
     
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        # ⚠️ 최신 표준 모델인 'gemini-2.0-flash' 적용
+        model = genai.GenerativeModel("gemini-2.0-flash")
         response = model.generate_content(prompt)
         content = response.text.strip()
         
@@ -157,7 +155,8 @@ def call_ai_seteuk(student_text, score, assessment_name, api_key=None):
 
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        # ⚠️ 최신 표준 모델인 'gemini-2.0-flash' 적용
+        model = genai.GenerativeModel("gemini-2.0-flash")
         response = model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
@@ -255,7 +254,7 @@ elif st.session_state.user_role == "admin":
         if st.button("교사 계정 업데이트"):
             st.session_state.teacher_credentials["id"] = new_t_id
             st.session_state.teacher_credentials["pw"] = new_t_pw
-            save_data() # 변경사항 파일 저장
+            save_data()
             st.success("교사 계정 정보가 성공적으로 변경되었습니다.")
         
         st.divider()
@@ -270,7 +269,7 @@ elif st.session_state.user_role == "admin":
         if st.button("학생 계정 저장/추가"):
             if m_s_id and m_s_pw:
                 st.session_state.student_credentials[m_s_id] = m_s_pw
-                save_data() # 변경사항 파일 저장
+                save_data()
                 st.success(f"학번 '{m_s_id}' 학생 계정이 저장되었습니다.")
             else:
                 st.warning("학번과 비밀번호를 모두 입력해 주세요.")
@@ -362,7 +361,7 @@ elif st.session_state.user_role == "student":
                             sub_data["score"] = ai_result.get("score", 0)
                             sub_data["deduction"] = ai_result.get("deduction", "")
                             sub_data["comment"] = ai_result.get("comment", "")
-                            save_data() # 작성 및 피드백 내용 파일 저장
+                            save_data()
                             st.rerun()
 
             with col2:
@@ -376,7 +375,7 @@ elif st.session_state.user_role == "student":
                         sub_data["deduction"] = ai_result.get("deduction", "")
                         sub_data["comment"] = ai_result.get("comment", "")
                         sub_data["status"] = "submitted"
-                        save_data() # 최종 제출 상태 파일 저장
+                        save_data()
                         st.success("성공적으로 최종 제출되었습니다!")
                         st.rerun()
 
@@ -478,7 +477,7 @@ elif st.session_state.user_role == "teacher":
                         "max_score": new_max_score
                     }
                     st.session_state.extracted_pdf_text = ""
-                    save_data() # 새 수행평가 등록 시 파일 저장
+                    save_data()
                     st.success(f"'{new_title}' 수행평가가 성공적으로 등록되었습니다!")
                     st.rerun()
                 else:
@@ -526,7 +525,7 @@ elif st.session_state.user_role == "teacher":
                                 os.environ.get("GEMINI_API_KEY")
                             )
                             student_work["se-teuk"] = generated_text
-                            save_data() # 세특 자동 생성 결과 파일 저장
+                            save_data()
                             st.rerun()
 
                     edited_seteuk = st.text_area(
@@ -537,5 +536,5 @@ elif st.session_state.user_role == "teacher":
 
                     if st.button("💾 세특 수정사항 저장"):
                         student_work["se-teuk"] = edited_seteuk
-                        save_data() # 세특 수동 편집 결과 파일 저장
+                        save_data()
                         st.success("세특 내용이 저장되었습니다!")
