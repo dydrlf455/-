@@ -102,21 +102,20 @@ def call_ai_grading(student_text, rubric_text, api_key=None):
 응답 JSON 포맷:
 {{
   "score": (숫자, 예: 8.5),
-  "deduction": "(감점 사유 및 부족했던 부분 요약)",
+  "item_deductions": "(루브릭의 각 평가 요소별로 어떤 부분이 충족되었고 어떤 부분에서 감점되었는지 항목별로 상세히 서술)",
   "comment": "(학생에게 건네는 격려 및 보완 가이드 코멘트)"
 }}
 """
     if not GENAI_AVAILABLE or not api_key:
         return {
             "score": 8.0,
-            "deduction": "1970년대 구체적인 사건이나 법적 제도적 한계에 대한 언급이 조금 더 구체적이면 좋습니다.",
+            "item_deductions": "- 역사적 사실의 정확성 (2.5/3점): 구체적 사실 언급은 있으나 일부 연도 누락\n- 관점의 균형성 (3.0/4점): 노동자 고통 서술이 다소 부족함\n- 결론 도출 (2.5/3점): 사료 연계 분석 양호",
             "comment": "전반적인 흐름 이해가 훌륭합니다. 구체적 사료나 사례를 한 가지만 더 추가해 보세요!",
             "is_mock": True
         }
     
     try:
         genai.configure(api_key=api_key)
-        # ⚠️ 최신 가이드에 맞춘 'gemini-3.6-flash' 적용
         model = genai.GenerativeModel("gemini-3.6-flash")
         response = model.generate_content(prompt)
         content = response.text.strip()
@@ -131,10 +130,30 @@ def call_ai_grading(student_text, rubric_text, api_key=None):
     except Exception as e:
         return {
             "score": 0.0,
-            "deduction": f"AI 분석 중 오류 발생: {str(e)}",
+            "item_deductions": f"AI 분석 중 오류 발생: {str(e)}",
             "comment": "API 키를 확인하거나 잠시 후 다시 시도해 주세요.",
             "is_mock": True
         }
+
+def call_ai_table_parser(raw_text, api_key=None):
+    """줄글 루브릭을 표 데이터(Markdown Table 또는 구조화된 형태)로 변환"""
+    prompt = f"""
+다음은 고등학교 역사 과목 수행평가 루브릭(채점 기준) 내용입니다. 
+이 내용을 교사가 보기 쉽도록 '평가 요소', '배점', '세부 기준' 항목으로 나누어 깔끔한 마크다운 표(Markdown Table) 형식으로 정리해 주세요. 다른 서론이나 설명 없이 오직 마크다운 표 형식만 출력하세요.
+
+[루브릭 원문]
+{raw_text}
+"""
+    if not GENAI_AVAILABLE or not api_key:
+        return "| 평가 요소 | 배점 | 세부 기준 |\n|---|---|---|\n| 역사적 사실의 정확성 | 3점 | 1970년대 경제개발과 노동 환경 구체적 사실 |\n| 관점의 균형성 | 4점 | 경제 성과와 노동자 고통 균형 분석 |\n| 문맥적 이해 | 3점 | 사료 연계 역사적 의미 도출 |"
+
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-3.6-flash")
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except:
+        return raw_text
 
 def call_ai_seteuk(student_text, score, assessment_name, api_key=None):
     prompt = f"""
@@ -155,7 +174,6 @@ def call_ai_seteuk(student_text, score, assessment_name, api_key=None):
 
     try:
         genai.configure(api_key=api_key)
-        # ⚠️ 최신 가이드에 맞춘 'gemini-3.6-flash' 적용
         model = genai.GenerativeModel("gemini-3.6-flash")
         response = model.generate_content(prompt)
         return response.text.strip()
@@ -316,10 +334,10 @@ elif st.session_state.user_role == "student":
         st.warning("현재 등록된 수행평가가 없습니다. 교사에게 문의하세요.")
     else:
         selected_assess = st.selectbox("진행할 수행평가 선택", assess_list)
-        current_rubric = st.session_state.assessments[selected_assess]["rubric"]
+        current_rubric_table = st.session_state.assessments[selected_assess].get("rubric_table", st.session_state.assessments[selected_assess]["rubric"])
         
-        with st.expander("📌 [필독] 이번 수행평가 채점 기준 (루브릭)", expanded=True):
-            st.markdown(current_rubric)
+        with st.expander("📌 [필독] 이번 수행평가 채점 기준 (루브릭 표)", expanded=True):
+            st.markdown(current_rubric_table)
         
         if student_id not in st.session_state.student_submissions:
             st.session_state.student_submissions[student_id] = {}
@@ -328,7 +346,7 @@ elif st.session_state.user_role == "student":
                 "draft": "",
                 "status": "draft",
                 "score": None,
-                "deduction": "",
+                "item_deductions": "",
                 "comment": ""
             }
         
@@ -339,7 +357,8 @@ elif st.session_state.user_role == "student":
             st.warning("🔒 이 과제는 이미 **[최종 제출]** 처리가 완료되어 수정할 수 없습니다.")
             st.text_area("제출된 글 원문", value=sub_data["draft"], height=250, disabled=True)
             st.metric("가채점 최종 점수", f"{sub_data['score']} 점 / {st.session_state.assessments[selected_assess]['max_score']}점")
-            st.info(f"**AI 피드백 요약:** {sub_data['comment']}")
+            st.info(f"**항목별 감점 및 보완 포인트:**\n\n{sub_data.get('item_deductions', '')}")
+            st.success(f"**AI 코멘트:**\n\n{sub_data['comment']}")
         else:
             st.subheader("✍️ 서논술형 글쓰기 및 AI 가채점")
             user_input_text = st.text_area(
@@ -355,11 +374,11 @@ elif st.session_state.user_role == "student":
                     if not user_input_text.strip():
                         st.warning("내용을 먼저 작성해 주세요.")
                     else:
-                        with st.spinner("Gemini AI가 루브릭에 맞춰 분석 중입니다..."):
-                            ai_result = call_ai_grading(user_input_text, current_rubric, os.environ.get("GEMINI_API_KEY"))
+                        with st.spinner("Gemini AI가 루브릭 기준 항목별로 분석 중입니다..."):
+                            ai_result = call_ai_grading(user_input_text, current_rubric_table, os.environ.get("GEMINI_API_KEY"))
                             sub_data["draft"] = user_input_text
                             sub_data["score"] = ai_result.get("score", 0)
-                            sub_data["deduction"] = ai_result.get("deduction", "")
+                            sub_data["item_deductions"] = ai_result.get("item_deductions", "")
                             sub_data["comment"] = ai_result.get("comment", "")
                             save_data()
                             st.rerun()
@@ -369,10 +388,10 @@ elif st.session_state.user_role == "student":
                     if not user_input_text.strip():
                         st.error("내용이 비어있습니다.")
                     else:
-                        ai_result = call_ai_grading(user_input_text, current_rubric, os.environ.get("GEMINI_API_KEY"))
+                        ai_result = call_ai_grading(user_input_text, current_rubric_table, os.environ.get("GEMINI_API_KEY"))
                         sub_data["draft"] = user_input_text
                         sub_data["score"] = ai_result.get("score", 0)
-                        sub_data["deduction"] = ai_result.get("deduction", "")
+                        sub_data["item_deductions"] = ai_result.get("item_deductions", "")
                         sub_data["comment"] = ai_result.get("comment", "")
                         sub_data["status"] = "submitted"
                         save_data()
@@ -386,7 +405,7 @@ elif st.session_state.user_role == "student":
                 with c1:
                     st.metric("가채점 점수", f"{sub_data['score']} / {st.session_state.assessments[selected_assess]['max_score']}점")
                 with c2:
-                    st.info(f"**감점 및 보완 포인트:**\n\n{sub_data['deduction']}")
+                    st.info(f"**항목별 감점 및 보완 포인트:**\n\n{sub_data.get('item_deductions', '')}")
                 st.success(f"**AI 코멘트:**\n\n{sub_data['comment']}")
 
 # ------------------------------------------
@@ -396,13 +415,15 @@ elif st.session_state.user_role == "teacher":
     st.title("👩‍🏫 교사용 대시보드 및 관리자 모드")
     
     tab_dashboard, tab_management, tab_seteuk = st.tabs([
-        "📋 학급별 제출 대시보드", 
-        "⚙️ 수행평가 및 루브릭 관리 (PDF 업로드 지원)", 
+        "📋 학급별 제출 대시보드 (상세 팝업 지원)", 
+        "⚙️ 수행평가 및 루브릭 관리 (자동 표 변환)", 
         "✨ 세특 초안 생성 및 열람"
     ])
 
     with tab_dashboard:
-        st.subheader("학생 제출 현황 명렬표")
+        st.subheader("학생 제출 현황 및 가채점/최종 점수 확인")
+        st.info("💡 **팁:** 표 아래의 상세 조회 기능에서 학번을 선택하면 학생의 원문, 항목별 감점 사유, AI 피드백을 팝업창처럼 한눈에 확인할 수 있습니다.")
+        
         assess_names = list(st.session_state.assessments.keys())
         if not assess_names:
             st.info("등록된 수행평가가 없습니다. 탭을 이동해 새 수행평가를 등록해 주세요.")
@@ -418,10 +439,10 @@ elif st.session_state.user_role == "teacher":
                     score_str = "-"
                 elif sub_info["status"] == "draft":
                     status_icon = "📝 작성중"
-                    score_str = f"{sub_info.get('score', 0)}점 (가채점)"
+                    score_str = f"{sub_info.get('score', 0)}점 (가채점 상태)"
                 else:
                     status_icon = "✅ 최종제출"
-                    score_str = f"{sub_info.get('score', 0)}점"
+                    score_str = f"{sub_info.get('score', 0)}점 (최종)"
                 
                 table_rows.append({
                     "학번": sid,
@@ -433,8 +454,29 @@ elif st.session_state.user_role == "teacher":
             df_status = pd.DataFrame(table_rows)
             st.dataframe(df_status, use_container_width=True, hide_index=True)
 
+            st.divider()
+            st.subheader("🔍 학생별 제출물 및 피드백 상세 팝업 뷰어")
+            target_sid = st.selectbox("상세 내용을 확인할 학생 학번 선택", current_students, key="popup_sid")
+            target_sub = st.session_state.student_submissions.get(target_sid, {}).get(selected_assess_t, None)
+
+            if not target_sub or not target_sub["draft"]:
+                st.warning(f"학번 {target_sid} 학생은 아직 해당 과제를 작성하지 않았습니다.")
+            else:
+                # 팝업 형태의 컨테이너 박스 생성
+                with st.container(border=True):
+                    st.markdown(f"### 📋 [학번: {target_sid}] 학생 상세 제출 및 피드백 리포트")
+                    col_p1, col_p2 = st.columns(2)
+                    with col_p1:
+                        st.markdown("**✍️ 학생 작성 원문**")
+                        st.text_area("원문", value=target_sub["draft"], height=250, disabled=True, key=f"popup_draft_{target_sid}")
+                    with col_p2:
+                        st.markdown("**🤖 AI 평가 및 감점 리포트**")
+                        st.metric("부여된 점수", f"{target_sub.get('score', 0)}점 / {st.session_state.assessments[selected_assess_t]['max_score']}점 ({'최종 제출' if target_sub['status']=='submitted' else '가채점 중'})")
+                        st.info(f"**항목별 감점 분석:**\n\n{target_sub.get('item_deductions', '내용 없음')}")
+                        st.success(f"**학생용 코멘트:**\n\n{target_sub.get('comment', '내용 없음')}")
+
     with tab_management:
-        st.subheader("📁 수행평가 및 루브릭 등록 (PDF 업로드 기능 포함)")
+        st.subheader("📁 수행평가 및 루브릭 등록 (줄글 ➡️ 표 자동 변환)")
         
         if "extracted_pdf_text" not in st.session_state:
             st.session_state.extracted_pdf_text = ""
@@ -452,10 +494,13 @@ elif st.session_state.user_role == "teacher":
                             extracted_text += text + "\n"
                     
                     if extracted_text.strip():
-                        st.session_state.extracted_pdf_text = extracted_text.strip()
-                        st.success("PDF 파일에서 채점 기준 텍스트를 성공적으로 추출했습니다! 아래 입력창에 자동으로 반영되었습니다.")
+                        # AI를 통해 줄글 루브릭을 표 형식으로 자동 변환
+                        with st.spinner("AI가 PDF 루브릭을 깔끔한 표 형식으로 자동 변환 중입니다..."):
+                            table_formatted = call_ai_table_parser(extracted_text.strip(), os.environ.get("GEMINI_API_KEY"))
+                        st.session_state.extracted_pdf_text = table_formatted
+                        st.success("PDF 루브릭 추출 및 표 형식 변환 완료! 아래 입력창에 적용되었습니다.")
                     else:
-                        st.warning("PDF에서 텍스트를 추출하지 못했습니다. (이미지 형태의 PDF일 수 있습니다.)")
+                        st.warning("PDF에서 텍스트를 추출하지 못했습니다.")
                 except Exception as e:
                     st.error(f"PDF 파일 읽기 오류: {str(e)}")
             else:
@@ -465,8 +510,8 @@ elif st.session_state.user_role == "teacher":
             new_title = st.text_input("수행평가명", placeholder="예: 5·18 민주 운동의 역사적 의의 서술")
             new_max_score = st.number_input("만점 점수", min_value=1, max_value=100, value=10)
             
-            default_rubric_content = st.session_state.extracted_pdf_text if st.session_state.extracted_pdf_text else "평가 요소별 배점 및 세부 기준을 직접 입력하거나 위에서 PDF를 업로드하세요."
-            new_rubric = st.text_area("루브릭 채점 기준 (PDF 업로드 시 자동 입력됨)", value=default_rubric_content, height=200)
+            default_rubric_content = st.session_state.extracted_pdf_text if st.session_state.extracted_pdf_text else "| 평가 요소 | 배점 | 세부 기준 |\n|---|---|---|\n| 항목명 | 배점 | 기준 내용을 적어주세요 |"
+            new_rubric = st.text_area("루브릭 채점 기준 (표 형식으로 자동 변환됨)", value=default_rubric_content, height=220)
             
             submitted_new = st.form_submit_button("수행평가 최종 등록")
             
@@ -474,6 +519,7 @@ elif st.session_state.user_role == "teacher":
                 if new_title and new_rubric:
                     st.session_state.assessments[new_title] = {
                         "rubric": new_rubric,
+                        "rubric_table": new_rubric,
                         "max_score": new_max_score
                     }
                     st.session_state.extracted_pdf_text = ""
@@ -484,10 +530,10 @@ elif st.session_state.user_role == "teacher":
                     st.warning("수행평가명과 루브릭 내용을 모두 입력해 주세요.")
         
         st.divider()
-        st.markdown("### 📋 현재 등록된 수행평가 목록")
+        st.markdown("### 📋 현재 등록된 수행평가 목록 (표 루브릭 확인)")
         for title, info in st.session_state.assessments.items():
             with st.expander(f"📁 {title} (만점: {info['max_score']}점)"):
-                st.markdown(info["rubric"])
+                st.markdown(info.get("rubric_table", info["rubric"]))
 
     with tab_seteuk:
         st.subheader("최종 제출 학생 원문 확인 및 세특 자동 생성")
