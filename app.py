@@ -1,390 +1,376 @@
-import json
 import os
-import google.generativeai as genai
-import pandas as pd
-import pypdf
 import streamlit as st
+import pandas as pd
+import json
 
-# 페이지 기본 설정
-st.set_page_config(
-    page_title="역사과 AI 서논술형 수행평가 시스템 (Gemini)", page_icon="📜", layout="wide"
-)
+# OpenAI 라이브러리 안전 Import
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
 
 # ==========================================
-# [설정] 관리자 계정 정보
+# [기본 설정 및 세션 스테이트 초기화]
 # ==========================================
-ADMIN_ID = "dydrlf455"
-ADMIN_PW = "dudth0905!"
+st.set_page_config(page_title="역사과 AI 서논술형 수행평가 시스템", layout="wide")
 
-# 제미나이 API 설정 함수
-def init_gemini():
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if api_key:
-        genai.configure(api_key=api_key)
-        return True
-    return False
+# 교사 계정 정보 (하드코딩)
+TEACHER_CREDENTIALS = {"id": "history_teacher", "pw": "2026"}
 
-# 세션 스테이트 초기화 (데이터베이스 대체)
-if "user_role" not in st.session_state:
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
     st.session_state.user_role = None  # 'teacher' or 'student'
-if "current_student_id" not in st.session_state:
-    st.session_state.current_student_id = None
-if "show_admin_login" not in st.session_state:
-    st.session_state.show_admin_login = False
+    st.session_state.user_id = None
 
-if "evaluations" not in st.session_state:
-    st.session_state.evaluations = {
+# 과제 및 루브릭 데이터 저장소
+if "assessments" not in st.session_state:
+    st.session_state.assessments = {
         "1970년대 산업화와 노동 현실 분석": {
-            "rubric": "1. 역사적 사실(사료)의 정확한 인용 (10점)\n2. 구조적 모순(노동/환경 문제)에 대한 인과적 분석 (10점)\n3. 비판적 대안 및 역사적 통찰력 (10점)",
-            "total_score": 30,
+            "rubric": """
+            [만점: 10점]
+            1. 역사적 사실의 정확성 (3점): 1970년대 경제개발과 노동 환경의 구체적 사실 언급 여부
+            2. 관점의 균형성 및 비판적 사고 (4점): 경제적 성과와 그 이면에 존재했던 노동자의 고통을 균형 있게 분석했는가?
+            3. 문맥적 이해 및 결론 도출 (3점): 제시된 사료와 연계하여 역사적 의미를 도출했는가?
+            """,
+            "max_score": 10
         }
     }
 
-if "submissions" not in st.session_state:
-    st.session_state.submissions = {}
+if "student_submissions" not in st.session_state:
+    st.session_state.student_submissions = {}
 
-if "form_eval_name" not in st.session_state:
-    st.session_state.form_eval_name = "일제의 내선일체 포스터 분석 및 비판적 역사 글쓰기"
-if "form_rubric" not in st.session_state:
-    st.session_state.form_rubric = (
-        "1. 포스터 분석력 (20점)\n"
-        "2. 역사적 맥락 파악 (20점)\n"
-        "3. 비판적 사고력 (30점)\n"
-        "4. 문제 해결력 구술 발표 (10점)"
-    )
-if "form_total_score" not in st.session_state:
-    st.session_state.form_total_score = 80
-
-if "student_list" not in st.session_state:
-    st.session_state.student_list = [f"101{i:02d}" for i in range(1, 21)]
-
-
-# Gemini API 호출 함수 (가채점)
-def call_ai_grader(text, rubric_text):
-    if not init_gemini():
-        return {
-            "score": 24,
-            "deductions": "1. 사료 인용은 적절하나 구체적 통계 언급이 다소 부족함 (-3점)\n2. 노동 조건의 변화와 법적 제도 연계 분석이 평면적임 (-3점)",
-            "feedback": "제출한 내용은 1970년대 노동 현실의 핵심을 잘 짚었습니다. 다만 '근로기준법 준수 요구' 등 당시 구체적인 노동쟁의 사례를 덧붙이면 훨씬 설득력 있는 글이 됩니다.",
-        }
-
-    prompt = f"""
-    당신은 고등학교 역사 교사입니다. 아래의 채점 기준(루브릭)을 바탕으로 학생의 서논술형 답안을 가채점해 주세요.
-    반드시 JSON 형식으로만 응답하며, 키는 'score'(숫자), 'deductions'(문자열), 'feedback'(문자열)로 구성하세요.
-
-    [채점 기준]
-    {rubric_text}
-
-    [학생 답안]
-    {text}
-    """
-    try:
-        model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
-            generation_config={"response_mime_type": "application/json"}
-        )
-        response = model.generate_content(prompt)
-        return json.loads(response.text)
-    except Exception as e:
-        return {
-            "score": 20,
-            "deductions": f"AI 분석 중 오류 발생으로 기본 점수 부여 ({str(e)})",
-            "feedback": "내용을 다시 확인하고 보완해 주세요.",
-        }
-
-
-# Gemini API 호출 함수 (세특 초안 생성)
-def call_ai_setuk(student_name_or_id, text, score, eval_name):
-    if not init_gemini():
-        return f"[{student_name_or_id}] 학생은 '{eval_name}' 수행평가에서 서논술형 글쓰기를 수행함. 당시 사료를 바탕으로 1970년대 산업화 과정에서 발생한 사회적 모순과 노동 문제를 인과적으로 분석해내는 역사적 탐구력이 돋보임."
-
-    prompt = f"""
-    당신은 고등학교 역사 교사입니다. 오직 아래에 제공된 [학생 원문] 내용만을 바탕으로 학교생활기록부 '세부능력 및 특기사항(세특)' 초안을 작성해 주세요.
-    - 절대 환각(학생이 쓰지 않은 사실)을 지어내지 말 것.
-    - 2022 개정 교육과정 역사과 성취기준 및 핵심 역량(역사적 탐구력, 비판적 사고력 등)을 반영할 것.
-    - 분량은 500자 이내의 명료한 문어체로 작성할 것.
-
-    [수행평가명]: {eval_name}
-    [학생 점수]: {score}점
-    [학생 원문]:
-    {text}
-    """
-    model = genai.GenerativeModel(model_name="gemini-2.5-flash")
-    response = model.generate_content(prompt)
-    return response.text.strip()
-
-
-# PDF 텍스트 추출 및 Gemini 루브릭 자동 추출 함수
-def extract_rubric_from_pdf(pdf_file):
-    try:
-        reader = pypdf.PdfReader(pdf_file)
-        extracted_text = ""
-        for page in reader.pages:
-            extracted_text += page.extract_text() or ""
-    except Exception as e:
-        return None, f"PDF 읽기 오류: {str(e)}"
-
-    if not init_gemini():
-        return None, "Gemini API 키가 설정되지 않았습니다. Streamlit Secrets에 GEMINI_API_KEY를 등록해 주세요."
-
-    prompt = f"""
-    당신은 고등학교 역사 교사입니다. 아래의 [수행평가 계획서 텍스트]를 분석하여 JSON 형식으로만 답하세요.
-    필수 키:
-    - 'title': (문자열) 수행평가명
-    - 'rubric': (문자열) 평가 요소와 배점이 정리된 루브릭 내용
-    - 'total_score': (숫자) 총 배점 합계 (숫자만)
-
-    [수행평가 계획서 텍스트]:
-    {extracted_text[:4000]}
-    """
-    try:
-        model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
-            generation_config={"response_mime_type": "application/json"}
-        )
-        response = model.generate_content(prompt)
-        data = json.loads(response.text)
-        return data, None
-    except Exception as e:
-        return None, f"AI 분석 오류: {str(e)}"
-
+SAMPLE_CLASS_STUDENTS = [f"101{str(i).zfill(2)}" for i in range(1, 21)]
 
 # ==========================================
-# 1. 로그인 화면 (관리자 바로가기 배너 포함)
+# [AI 연동 함수 정의]
 # ==========================================
-if st.session_state.user_role is None:
-    st.title("📜 역사과 서논술형 AI 수행평가 시스템 (Gemini)")
+def call_ai_grading(student_text, rubric_text, api_key=None):
+    prompt = f"""
+당신은 고등학교 역사 교사입니다. 아래의 [수행평가 루브릭]을 기반으로 학생이 작성한 [학생 제출물]을 공정하게 평가해 주세요.
+반드시 아래의 JSON 포맷으로만 응답해 주세요. (마크다운 코드블록 
+```json ... ``` 사용 가능)
 
-    with st.container():
-        st.info("🛠️ **교사(관리자)이신가요?** 아래 버튼을 눌러 관리자 모드로 즉시 로그인할 수 있습니다.")
-        if st.button("👉 [관리자 모드 로그인하기]", type="primary", use_container_width=True):
-            st.session_state.show_admin_login = not st.session_state.show_admin_login
+[수행평가 루브릭]
+{rubric_text}
 
-    if st.session_state.show_admin_login:
-        with st.expander("🔐 관리자 계정 인증", expanded=True):
-            col_ad1, col_ad2, col_ad3 = st.columns()  # <--- 이 부분 수정됨!
-            with col_ad1:
-                input_admin_id = st.text_input("관리자 아이디", key="admin_id_input")
-            with col_ad2:
-                input_admin_pw = st.text_input("관리자 비밀번호", type="password", key="admin_pw_input")
-            with col_ad3:
-                st.write("")
-                st.write("")
-                if st.button("로그인 확인", key="admin_submit_btn"):
-                    if input_admin_id == ADMIN_ID and input_admin_pw == ADMIN_PW:
-                        st.session_state.user_role = "teacher"
-                        st.session_state.show_admin_login = False
-                        st.rerun()
-                    else:
-                        st.error("아이디 또는 비밀번호가 틀렸습니다. 다시 확인해 주세요.")
+[학생 제출물]
+{student_text}
+
+응답 JSON 포맷:
+{{
+  "score": (숫자, 예: 8.5),
+  "deduction": "(감점 사유 및 부족했던 부분 요약)",
+  "comment": "(학생에게 건네는 격려 및 보완 가이드 코멘트)"
+}}
+"""
+    if not OPENAI_AVAILABLE or not api_key:
+        return {
+            "score": 8.0,
+            "deduction": "1970년대 구체적인 사건이나 법적 제도적 한계에 대한 언급이 조금 더 구체적이면 좋습니다.",
+            "comment": "전반적인 흐름 이해가 훌륭합니다. 구체적 사료나 사례를 한 가지만 더 추가해 보세요!",
+            "is_mock": True
+        }
+    
+    try:
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3
+        )
+        content = response.choices[0].message.content.strip()
+        if content.startswith("
+```json"):
+            content = content[7:-3].strip()
+        elif content.startswith("
+```"):
+            content = content[3:-3].strip()
+        return json.loads(content)
+    except Exception as e:
+        return {
+            "score": 0.0,
+            "deduction": f"AI 분석 중 오류 발생: {str(e)}",
+            "comment": "API 키를 확인하거나 잠시 후 다시 시도해 주세요.",
+            "is_mock": True
+        }
+
+def call_ai_seteuk(student_text, score, assessment_name, api_key=None):
+    prompt = f"""
+당신은고등학교 역사 교사입니다. 2022 개정 교육과정 역사과 성취기준 및 핵심 역량(역사적 사고력, 역사적 탐구 및 소통력 등)을 바탕으로 아래 학생의 세부능력 및 특기사항(세특) 초안을 작성해 주세요.
+
+[절대 규칙 - 환각 배제]
+1. 아래 제공된 [학생 원문 내용]에 명시적으로 드러난 사실, 역사적 개념, 탐구 내용만을 기반으로 작성할 것.
+2. 학생 원문에 없는 내용은 절대 지어내지 말 것.
+3. 분량은 학교생활기록부 기재 요령에 맞게 500바이트 내외(3~5문장)로 간결하게 서술할 것.
+
+[수행평가명]: {assessment_name}
+[획득 점수]: {score}점
+[학생 원문 내용]:
+{student_text}
+"""
+    if not OPENAI_AVAILABLE or not api_key:
+        return f"[모의 세특 생성 결과] ({assessment_name} / {score}점 기반)\n수행평가 과정에서 해당 역사적 주제에 대한 뛰어난 탐구력과 균형 잡힌 시각을 보여줌. 역사적 사실을 정확하게 이해하고 논리적으로 서술하는 역량이 우수함."
+
+    try:
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"세특 생성 중 오류 발생: {str(e)}"
+
+# ==========================================
+# [사이드바: 로그인 및 환경설정]
+# ==========================================
+with st.sidebar:
+    st.header("🔑 로그인 및 설정")
+    api_key_input = st.text_input("OpenAI API 키 (선택입력)", type="password", help="입력하지 않으면 기본 모의 AI 엔진이 작동합니다.")
+    if api_key_input:
+        os.environ["OPENAI_API_KEY"] = api_key_input
 
     st.divider()
-    st.markdown("### 🎓 학생용 로그인")
-    s_input = st.text_input(
-        "학번 입력 (예: 10105)",
-        max_chars=5,
-        help="아이디와 비밀번호 모두 학번으로 통일되어 있습니다.",
-    )
-    if st.button("학생으로 입장하기", type="secondary"):
-        if s_input in st.session_state.student_list:
-            st.session_state.user_role = "student"
-            st.session_state.current_student_id = s_input
-            st.rerun()
+
+    if not st.session_state.logged_in:
+        login_type = st.radio("로그인 유형 선택", ["학생 로그인", "교사 로그인"])
+        
+        if login_type == "학생 로그인":
+            st.caption("아이디와 비밀번호 모두 '학번'으로 입력하세요. (예: 10101)")
+            s_id = st.text_input("학번 입력", max_chars=5)
+            s_pw = st.text_input("비밀번호 입력", type="password", max_chars=5)
+            
+            if st.button("학생 입장하기"):
+                if s_id and s_id == s_pw and s_id.isdigit():
+                    st.session_state.logged_in = True
+                    st.session_state.user_role = "student"
+                    st.session_state.user_id = s_id
+                    st.rerun()
+                else:
+                    st.error("학번과 비밀번호를 올바르게 일치시켜 입력해 주세요.")
+        
         else:
-            st.error("등록되지 않은 학번입니다. (예시: 10101 ~ 10120)")
-
-# ==========================================
-# 2. 학생용 인터페이스
-# ==========================================
-elif st.session_state.user_role == "student":
-    sid = st.session_state.current_student_id
-    st.sidebar.title(f"🎓 학생 모드 ({sid})")
-    if st.sidebar.button("로그아웃"):
-        st.session_state.user_role = None
-        st.session_state.current_student_id = None
-        st.rerun()
-
-    eval_names = list(st.session_state.evaluations.keys())
-    selected_eval = st.selectbox("수행평가 선택", eval_names)
-    eval_info = st.session_state.evaluations[selected_eval]
-
-    st.info(f"📋 **[수행평가 채점 기준 (루브릭)] - {selected_eval}**\n\n{eval_info['rubric']}")
-
-    if sid not in st.session_state.submissions:
-        st.session_state.submissions[sid] = {}
-    if selected_eval not in st.session_state.submissions[sid]:
-        st.session_state.submissions[sid][selected_eval] = {
-            "draft_text": "",
-            "draft_score": 0,
-            "deductions": "",
-            "feedback": "",
-            "is_final": False,
-        }
-
-    sub_data = st.session_state.submissions[sid][selected_eval]
-
-    if sub_data["is_final"]:
-        st.success("✅ 본 수행평가는 이미 **[최종 제출]**이 완료되었습니다. 수정할 수 없습니다.")
-        st.text_area("제출된 최종 답안", value=sub_data["draft_text"], height=250, disabled=True)
-        st.metric("가채점 점수", f"{sub_data['draft_score']} 점")
+            t_id = st.text_input("교사 아이디")
+            t_pw = st.text_input("교사 비밀번호", type="password")
+            if st.button("교사 입장하기"):
+                if t_id == TEACHER_CREDENTIALS["id"] and t_pw == TEACHER_CREDENTIALS["pw"]:
+                    st.session_state.logged_in = True
+                    st.session_state.user_role = "teacher"
+                    st.session_state.user_id = t_id
+                    st.rerun()
+                else:
+                    st.error("교사 인증 정보가 일치하지 않습니다.")
     else:
-        user_essay = st.text_area(
-            "서논술형 답안 작성란 (계속 수정 및 재가채점이 가능합니다)",
-            value=sub_data["draft_text"],
-            height=250,
-            placeholder="여기에 답안을 작성하세요...",
+        st.success(f"현재 접속자: **{st.session_state.user_id}** ({'교사' if st.session_state.user_role == 'teacher' else '학생'})")
+        if st.button("로그아웃"):
+            st.session_state.logged_in = False
+            st.session_state.user_role = None
+            st.session_state.user_id = None
+            st.rerun()
+
+# ==========================================
+# [메인 화면 분기]
+# ==========================================
+if not st.session_state.logged_in:
+    st.title("📚 역사과 서논술형 AI 수행평가 플랫폼")
+    st.info("👈 왼쪽 사이드바에서 **학생 로그인** 또는 **교사 로그인**을 진행해 주세요.")
+    st.markdown("""
+    ### 🌟 시스템 주요 기능
+    * **학생용**: 루브릭 확인 ➡️ 글 작성 후 AI 실시간 가채점 및 피드백 ➡️ 확신이 서면 **최종 제출**
+    * **교용**: 수행평가 루브릭 관리 ➡️ 학급별 제출 현황 대시보드 확인 ➡️ 2022 개정 교육과정 기반 **AI 세특 초안 자동 생성**
+    """)
+
+elif st.session_state.user_role == "student":
+    student_id = st.session_state.user_id
+    st.title(f"🎓 학생용 수행평가 작성실 (학번: {student_id})")
+    
+    assess_list = list(st.session_state.assessments.keys())
+    selected_assess = st.selectbox("진행할 수행평가 선택", assess_list)
+    current_rubric = st.session_state.assessments[selected_assess]["rubric"]
+    
+    with st.expander("📌 [필독] 이번 수행평가 채점 기준 (루브릭)", expanded=True):
+        st.markdown(current_rubric)
+    
+    if student_id not in st.session_state.student_submissions:
+        st.session_state.student_submissions[student_id] = {}
+    if selected_assess not in st.session_state.student_submissions[student_id]:
+        st.session_state.student_submissions[student_id][selected_assess] = {
+            "draft": "",
+            "status": "draft",
+            "score": None,
+            "deduction": "",
+            "comment": ""
+        }
+    
+    sub_data = st.session_state.student_submissions[student_id][selected_assess]
+    is_submitted = (sub_data["status"] == "submitted")
+
+    if is_submitted:
+        st.warning("🔒 이 과제는 이미 **[최종 제출]** 처리가 완료되어 수정할 수 없습니다.")
+        st.text_area("제출된 글 원문", value=sub_data["draft"], height=250, disabled=True)
+        st.metric("가채점 최종 점수", f"{sub_data['score']} 점 / {st.session_state.assessments[selected_assess]['max_score']}점")
+        st.info(f"**AI 피드백 요약:** {sub_data['comment']}")
+    else:
+        st.subheader("✍️ 서논술형 글쓰기 및 AI 가채점")
+        user_input_text = st.text_area(
+            "과제 내용을 작성하거나 붙여넣으세요:",
+            value=sub_data["draft"],
+            height=300,
+            placeholder="예시: 1970년대 대한민국은 고도의 경제성장을 이룩하였으나, 저임금과 열악한 노동 환경이라는 어두운 이면이 존재했습니다..."
         )
-
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if st.button("🤖 AI 즉시 가채점 및 피드백 받기", type="secondary"):
-                if not user_essay.strip():
-                    st.warning("답안을 입력한 후 버튼을 눌러주세요.")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🤖 AI 가채점 및 피드백 받기 (재업로드 가능)", use_container_width=True):
+                if not user_input_text.strip():
+                    st.warning("내용을 먼저 작성해 주세요.")
                 else:
-                    with st.spinner("AI가 루브릭을 분석하여 피드백을 생성하고 있습니다..."):
-                        res = call_ai_grader(user_essay, eval_info["rubric"])
-                        sub_data["draft_text"] = user_essay
-                        sub_data["draft_score"] = res["score"]
-                        sub_data["deductions"] = res["deductions"]
-                        sub_data["feedback"] = res["feedback"]
+                    with st.spinner("AI가 루브릭에 맞춰 분석 중입니다..."):
+                        ai_result = call_ai_grading(user_input_text, current_rubric, os.environ.get("OPENAI_API_KEY"))
+                        sub_data["draft"] = user_input_text
+                        sub_data["score"] = ai_result.get("score", 0)
+                        sub_data["deduction"] = ai_result.get("deduction", "")
+                        sub_data["comment"] = ai_result.get("comment", "")
+                        st.rerun()
+
+        with col2:
+            if st.button("🚨 최종 제출하기 (이후 수정 불가)", type="primary", use_container_width=True):
+                if not user_input_text.strip():
+                    st.error("내용이 비어있습니다.")
+                else:
+                    ai_result = call_ai_grading(user_input_text, current_rubric, os.environ.get("OPENAI_API_KEY"))
+                    sub_data["draft"] = user_input_text
+                    sub_data["score"] = ai_result.get("score", 0)
+                    sub_data["deduction"] = ai_result.get("deduction", "")
+                    sub_data["comment"] = ai_result.get("comment", "")
+                    sub_data["status"] = "submitted"
+                    st.success("성공적으로 최종 제출되었습니다!")
                     st.rerun()
 
-        with col_b:
-            if st.button("🚨 최종 제출하기 (마감)", type="primary"):
-                if not user_essay.strip():
-                    st.error("답안을 작성한 후 최종 제출해 주세요.")
-                else:
-                    sub_data["draft_text"] = user_essay
-                    sub_data["is_final"] = True
-                    st.success("최종 제출되었습니다!")
-                    st.rerun()
+        if sub_data["score"] is not None:
+            st.divider()
+            st.subheader("📊 AI 가채점 및 피드백 결과")
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                st.metric("가채점 점수", f"{sub_data['score']} / {st.session_state.assessments[selected_assess]['max_score']}점")
+            with c2:
+                st.info(f"**감점 및 보완 포인트:**\n\n{sub_data['deduction']}")
+            st.success(f"**AI 코멘트:**\n\n{sub_data['comment']}")
 
-        if sub_data["draft_text"]:
-            st.divider("### 🔍 AI 피드백 결과")
-            m_col1, m_col2 = st.columns(2)
-            with m_col1:
-                st.metric("현재 가채점 점수", f"{sub_data['draft_score']} / {eval_info['total_score']}점")
-            with m_col2:
-                st.warning(f"**감점 및 주요 요인 사유**\n\n{sub_data['deductions']}")
-
-            st.info(f"💡 **보완 코멘트 (수정 가이드)**\n\n{sub_data['feedback']}")
-
-# ==========================================
-# 3. 교사용 인터페이스
-# ==========================================
 elif st.session_state.user_role == "teacher":
-    st.sidebar.title("👨‍🏫 교사 모드")
-    st.sidebar.caption(f"관리자 접속 중 ({ADMIN_ID})")
-    if st.sidebar.button("로그아웃"):
-        st.session_state.user_role = None
-        st.rerun()
+    st.title("👩‍🏫 교사용 대시보드 및 관리자 모드")
+    
+    tab_dashboard, tab_management, tab_seteuk = st.tabs([
+        "📋 학급별 제출 대시보드", 
+        "⚙️ 수행평가 및 루브릭 관리", 
+        "✨ 세특 초안 생성 및 열람"
+    ])
 
-    tab1, tab2, tab3 = st.tabs(["📊 제출 현황 대시보드", "📝 피드백 열람 및 세특 생성", "⚙️ 수행평가 및 루브릭 관리"])
+    with tab_dashboard:
+        st.subheader("학생 제출 현황 명렬표")
+        assess_names = list(st.session_state.assessments.keys())
+        selected_assess_t = st.selectbox("조회할 수행평가 선택", assess_names, key="dash_select")
 
-    with tab1:
-        st.header("학급별 학생 제출 현황 명렬표")
-        eval_names = list(st.session_state.evaluations.keys())
-        selected_eval_dash = st.selectbox("확인할 수행평가 선택", eval_names, key="dash_eval")
-
-        status_rows = []
-        for s_id in st.session_state.student_list:
-            s_sub = st.session_state.submissions.get(s_id, {}).get(selected_eval_dash)
-            if not s_sub or not s_sub["draft_text"]:
-                status = "미제출 ❌"
-                score = "-"
-            elif s_sub["is_final"]:
-                status = "최종 제출완료 🟢"
-                score = f"{s_sub['draft_score']}점"
+        table_rows = []
+        for sid in SAMPLE_CLASS_STUDENTS:
+            sub_info = st.session_state.student_submissions.get(sid, {}).get(selected_assess_t, None)
+            if not sub_info:
+                status_icon = "❌ 미제출"
+                score_str = "-"
+            elif sub_info["status"] == "draft":
+                status_icon = "📝 작성중"
+                score_str = f"{sub_info.get('score', 0)}점 (가채점)"
             else:
-                status = "작성 중(임시저장) 🟡"
-                score = f"{s_sub['draft_score']}점(가채점)"
+                status_icon = "✅ 최종제출"
+                score_str = f"{sub_info.get('score', 0)}점"
+            
+            table_rows.append({
+                "학번": sid,
+                "진행 상태": status_icon,
+                "점수": score_str,
+                "글자수": len(sub_info["draft"]) if sub_info else 0
+            })
+        
+        df_status = pd.DataFrame(table_rows)
+        st.dataframe(df_status, use_container_width=True, hide_index=True)
 
-            status_rows.append({"학번": s_id, "진행 상태": status, "점수": score})
+    with tab_management:
+        st.subheader("새로운 수행평가 및 루브릭 등록")
+        with st.form("new_assessment_form"):
+            new_title = st.text_input("수행평가명", placeholder="예: 3.15 의거의 역사적 의의 서술")
+            new_max_score = st.number_input("만점 점수", min_value=1, max_value=100, value=10)
+            new_rubric = st.text_area("루브릭 채점 기준 입력", height=150, placeholder="평가 요소별 배점 및 세부 기준을 작성하세요.")
+            submitted_new = st.form_submit_button("수행평가 등록")
+            
+            if submitted_new:
+                if new_title and new_rubric:
+                    st.session_state.assessments[new_title] = {
+                        "rubric": new_rubric,
+                        "max_score": new_max_score
+                    }
+                    st.success(f"'{new_title}' 수행평가가 등록되었습니다!")
+                    st.rerun()
+                else:
+                    st.warning("내용을 모두 입력해 주세요.")
+        
+        st.divider()
+        for title, info in st.session_state.assessments.items():
+            with st.expander(f"📁 {title} (만점: {info['max_score']}점)"):
+                st.markdown(info["rubric"])
 
-        df_status = pd.DataFrame(status_rows)
-        st.dataframe(df_status, use_container_width=True)
+    with tab_seteuk:
+        st.subheader("최종 제출 학생 원문 확인 및 세특 자동 생성")
+        assess_names = list(st.session_state.assessments.keys())
+        selected_assess_s = st.selectbox("수행평가 선택", assess_names, key="seteuk_select")
 
-    with tab2:
-        st.header("학생별 답안 열람 및 세특 초안 생성")
-        eval_names = list(st.session_state.evaluations.keys())
-        selected_eval_setuk = st.selectbox("수행평가 선택", eval_names, key="setuk_eval")
-
-        final_submitted_students = [
-            s_id for s_id in st.session_state.student_list
-            if st.session_state.submissions.get(s_id, {}).get(selected_eval_setuk, {}).get("is_final", False)
+        submitted_students = [
+            sid for sid, data in st.session_state.student_submissions.items()
+            if selected_assess_s in data and data[selected_assess_s]["status"] == "submitted"
         ]
 
-        if not final_submitted_students:
-            st.info("아직 최종 제출한 학생이 없습니다.")
+        if not submitted_students:
+            st.info("아직 최종 제출을 완료한 학생이 없습니다. (학생 계정으로 로그인 후 테스트해 보세요)")
         else:
-            chosen_s_id = st.selectbox("최종 제출한 학생 선택", final_submitted_students)
-            sub_info = st.session_state.submissions[chosen_s_id][selected_eval_setuk]
+            chosen_student = st.selectbox("최종 제출한 학생 선택 (학번)", submitted_students)
+            student_work = st.session_state.student_submissions[chosen_student][selected_assess_s]
 
-            col_p1, col_p2 = st.columns(2)
-            with col_p1:
-                st.subheader(f"학번 [{chosen_s_id}] 학생 원문")
-                st.text_area("학생 작성 답안", value=sub_info["draft_text"], height=300, disabled=True, key="view_text")
-            with col_p2:
-                st.subheader("채점 및 감점 내역")
-                st.metric("최종 확정/가채점 점수", f"{sub_info['draft_score']}점")
-                st.write("**감점 사유:**")
-                st.info(sub_info["deductions"])
+            col_w1, col_w2 = st.columns(2)
+            with col_w1:
+                st.markdown(f"**[학번: {chosen_student}] 학생 원문**")
+                st.text_area("원문 내용", value=student_work["draft"], height=300, disabled=True, key="student_original_text")
+                st.metric("획득 점수", f"{student_work.get('score', 0)}점")
 
-            st.divider()
+            with col_w2:
+                st.markdown("**[2022 개정 교육과정 기반 세특 초안 생성]**")
+                if st.button("✨ 학생 원문 기반 세특 초안 자동 생성", type="primary", use_container_width=True):
+                    with st.spinner("세특 초안을 생성 중입니다..."):
+                        generated_text = call_ai_seteuk(
+                            student_work["draft"],
+                            student_work.get("score", 0),
+                            selected_assess_s,
+                            os.environ.get("OPENAI_API_KEY")
+                        )
+                        student_work["se-teuk"] = generated_text
+                        st.rerun()
 
-            if st.button("✨ 학생 원문 기반 세특 초안 자동 생성하기", type="primary"):
-                with st.spinner("2022 개정 교육과정 기반 세특 초안을 작성 중입니다..."):
-                    generated_setuk = call_ai_setuk(
-                        chosen_s_id,
-                        sub_info["draft_text"],
-                        sub_info["draft_score"],
-                        selected_eval_setuk,
-                    )
-                    sub_info["generated_setuk"] = generated_setuk
-
-            if "generated_setuk" in sub_info:
-                st.subheader("생성된 세특 초안 (교사 편집 가능)")
-                edited_setuk = st.text_area(
-                    "학교생활기록부 세특 입력용 텍스트",
-                    value=sub_info["generated_setuk"],
-                    height=150,
+                edited_seteuk = st.text_area(
+                    "생성된 세특 초안 편집기 (교사 수정 가능):",
+                    value=student_work.get("se-teuk", ""),
+                    height=250
                 )
-                st.caption("ℹ️ 위 초안은 오직 학생이 직접 작성한 원문만을 바탕으로 생성되었으며, 교사가 자유롭게 수정할 수 있습니다.")
 
-    with tab3:
-        st.header("새로운 수행평가 및 루브릭 등록")
+                if st.button("💾 세특 수정사항 저장"):
+                    student_work["se-teuk"] = edited_seteuk
+                    st.success("세특 내용이 저장되었습니다!")
+```스트림릿(Streamlit)으로 구현하기에 아주 직관적이고 좋은 선택입니다. 구상하고 계신 앱의 핵심 기능이 무엇인지 알려주시면 바로 코드를 짜드릴 수 있습니다. 
 
-        with st.expander("📄 PDF 파일 업로드로 루브릭 자동 생성하기", expanded=True):
-            uploaded_pdf = st.file_uploader("수행평가 계획서(PDF) 업로드", type=["pdf"])
-            if uploaded_pdf is not None:
-                if st.button("🤖 AI로 PDF 분석하여 루브릭 채우기"):
-                    with st.spinner("PDF 파일을 읽고 루브릭과 배점을 분석하고 있습니다..."):
-                        extracted_data, err = extract_rubric_from_pdf(uploaded_pdf)
-                        if err:
-                            st.error(err)
-                        else:
-                            st.session_state.form_eval_name = extracted_data.get("title", st.session_state.form_eval_name)
-                            st.session_state.form_rubric = extracted_data.get("rubric", st.session_state.form_rubric)
-                            st.session_state.form_total_score = int(extracted_data.get("total_score", st.session_state.form_total_score))
-                            st.rerun()
+혹시 아래와 같은 형태라면 말씀해 주세요. 즉시 기본 코드(`app.py`)를 만들어 드립니다.
 
-        st.divider()
+* **사료 분석 및 OPCVL 검증 도구**: 원문 텍스트를 넣고 출처·목적·가치·한계를 구조화해서 분석·기록하는 인터랙티브 페이지
+* **수행평가 채점 및 세특(세부능력 및 특기사항) 초안 생성기**: 학생별 평가 항목을 체크하면 문장이 조합되어 나오는 보조 툴
+* **역사·사회 데이터 시각화 대시보드**: 특정 시계열 데이터(예: 1970년대 경제·사회 지표 등)를 그래프로 보여주고탐구 질문을 던지는 페이지
+* **질문 중심 탐구 활동 보드**: 학생들이 실시간으로 질문을 입력하고 키워드별로 분류·공유할 수 있는 소형 웹진 형태의 게시판
 
-        new_eval_name = st.text_input("수행평가명 입력", key="form_eval_name", placeholder="예: 5·18 민주화 운동의 역사적 의의 서술")
-        new_rubric = st.text_area(
-            "루브릭(평가 요소, 채점 기준, 배점) 등록",
-            key="form_rubric",
-            placeholder="1. 사료 해석의 객관성 (20점)\n2. 역사적 인과관계 파악 (20점)",
-            height=150,
-        )
-        new_total_score = st.number_input("총 배점", min_value=10, max_value=100, key="form_total_score", step=5)
-
-        if st.button("수행평가 등록하기", type="primary"):
-            if new_eval_name.strip() and new_rubric.strip():
-                st.session_state.evaluations[new_eval_name.strip()] = {
-                    "rubric": new_rubric.strip(),
-                    "total_score": new_total_score,
-                }
-                st.success(f"'{new_eval_name.strip()}' 수행평가가 성공적으로 등록되었습니다!")
-            else:
-                st.warning("수행평가명과 루브릭을 모두 입력해 주세요.")
+어떤 목적의 앱인지 편하게 말씀해 주세요. 필요한 라이브러리(`pandas`, `plotly`, `streamlit` 등)와 함께 바로 복사해서 쓸 수 있는 코드를 작성해 드리겠습니다.
