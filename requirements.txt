@@ -1,4 +1,4 @@
-treamlit
+streamlit
 pandas
 google-generativeai
 pypdf
