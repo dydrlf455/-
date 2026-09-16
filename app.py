@@ -3,17 +3,17 @@ import streamlit as st
 import pandas as pd
 import json
 
-# OpenAI 라이브러리 안전 Import
+# 구글 제미나이(Gemini) 라이브러리 안전 Import
 try:
-    from openai import OpenAI
-    OPENAI_AVAILABLE = True
+    import google.generativeai as genai
+    GENAI_AVAILABLE = True
 except ImportError:
-    OPENAI_AVAILABLE = False
+    GENAI_AVAILABLE = False
 
 # ==========================================
 # [기본 설정 및 세션 스테이트 초기화]
 # ==========================================
-st.set_page_config(page_title="역사과 AI 서논술형 수행평가 시스템", layout="wide")
+st.set_page_config(page_title="역사과 AI 서논술형 수행평가 시스템 (Gemini)", layout="wide")
 
 # 교사 계정 정보 (하드코딩)
 TEACHER_CREDENTIALS = {"id": "history_teacher", "pw": "2026"}
@@ -43,13 +43,12 @@ if "student_submissions" not in st.session_state:
 SAMPLE_CLASS_STUDENTS = [f"101{str(i).zfill(2)}" for i in range(1, 21)]
 
 # ==========================================
-# [AI 연동 함수 정의]
+# [구글 Gemini AI 연동 함수 정의]
 # ==========================================
 def call_ai_grading(student_text, rubric_text, api_key=None):
     prompt = f"""
 당신은 고등학교 역사 교사입니다. 아래의 [수행평가 루브릭]을 기반으로 학생이 작성한 [학생 제출물]을 공정하게 평가해 주세요.
-반드시 아래의 JSON 포맷으로만 응답해 주세요. (마크다운 코드블록 
-```json ... ``` 사용 가능)
+반드시 아래의 JSON 포맷으로만 응답해 주세요. (다른 설명 없이 순수 JSON만 출력하세요)
 
 [수행평가 루브릭]
 {rubric_text}
@@ -64,7 +63,7 @@ def call_ai_grading(student_text, rubric_text, api_key=None):
   "comment": "(학생에게 건네는 격려 및 보완 가이드 코멘트)"
 }}
 """
-    if not OPENAI_AVAILABLE or not api_key:
+    if not GENAI_AVAILABLE or not api_key:
         return {
             "score": 8.0,
             "deduction": "1970년대 구체적인 사건이나 법적 제도적 한계에 대한 언급이 조금 더 구체적이면 좋습니다.",
@@ -73,18 +72,13 @@ def call_ai_grading(student_text, rubric_text, api_key=None):
         }
     
     try:
-        client = OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3
-        )
-        content = response.choices[0].message.content.strip()
-        if content.startswith("
-```json"):
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        response = model.generate_content(prompt)
+        content = response.text.strip()
+        if content.startswith("```json"):
             content = content[7:-3].strip()
-        elif content.startswith("
-```"):
+        elif content.startswith("```"):
             content = content[3:-3].strip()
         return json.loads(content)
     except Exception as e:
@@ -97,7 +91,7 @@ def call_ai_grading(student_text, rubric_text, api_key=None):
 
 def call_ai_seteuk(student_text, score, assessment_name, api_key=None):
     prompt = f"""
-당신은고등학교 역사 교사입니다. 2022 개정 교육과정 역사과 성취기준 및 핵심 역량(역사적 사고력, 역사적 탐구 및 소통력 등)을 바탕으로 아래 학생의 세부능력 및 특기사항(세특) 초안을 작성해 주세요.
+당신은 고등학교 역사 교사입니다. 2022 개정 교육과정 역사과 성취기준 및 핵심 역량(역사적 사고력, 역사적 탐구 및 소통력 등)을 바탕으로 아래 학생의 세부능력 및 특기사항(세특) 초안을 작성해 주세요.
 
 [절대 규칙 - 환각 배제]
 1. 아래 제공된 [학생 원문 내용]에 명시적으로 드러난 사실, 역사적 개념, 탐구 내용만을 기반으로 작성할 것.
@@ -109,17 +103,14 @@ def call_ai_seteuk(student_text, score, assessment_name, api_key=None):
 [학생 원문 내용]:
 {student_text}
 """
-    if not OPENAI_AVAILABLE or not api_key:
+    if not GENAI_AVAILABLE or not api_key:
         return f"[모의 세특 생성 결과] ({assessment_name} / {score}점 기반)\n수행평가 과정에서 해당 역사적 주제에 대한 뛰어난 탐구력과 균형 잡힌 시각을 보여줌. 역사적 사실을 정확하게 이해하고 논리적으로 서술하는 역량이 우수함."
 
     try:
-        client = OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2
-        )
-        return response.choices[0].message.content.strip()
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        response = model.generate_content(prompt)
+        return response.text.strip()
     except Exception as e:
         return f"세특 생성 중 오류 발생: {str(e)}"
 
@@ -128,9 +119,9 @@ def call_ai_seteuk(student_text, score, assessment_name, api_key=None):
 # ==========================================
 with st.sidebar:
     st.header("🔑 로그인 및 설정")
-    api_key_input = st.text_input("OpenAI API 키 (선택입력)", type="password", help="입력하지 않으면 기본 모의 AI 엔진이 작동합니다.")
+    api_key_input = st.text_input("구글 AI 스튜디오 API 키 (Gemini API Key, 선택입력)", type="password", help="입력하지 않으면 기본 모의 AI 엔진이 작동합니다.")
     if api_key_input:
-        os.environ["OPENAI_API_KEY"] = api_key_input
+        os.environ["GEMINI_API_KEY"] = api_key_input
 
     st.divider()
 
@@ -174,12 +165,12 @@ with st.sidebar:
 # [메인 화면 분기]
 # ==========================================
 if not st.session_state.logged_in:
-    st.title("📚 역사과 서논술형 AI 수행평가 플랫폼")
+    st.title("📚 역사과 서논술형 AI 수행평가 플랫폼 (Gemini 엔진)")
     st.info("👈 왼쪽 사이드바에서 **학생 로그인** 또는 **교사 로그인**을 진행해 주세요.")
     st.markdown("""
     ### 🌟 시스템 주요 기능
     * **학생용**: 루브릭 확인 ➡️ 글 작성 후 AI 실시간 가채점 및 피드백 ➡️ 확신이 서면 **최종 제출**
-    * **교용**: 수행평가 루브릭 관리 ➡️ 학급별 제출 현황 대시보드 확인 ➡️ 2022 개정 교육과정 기반 **AI 세특 초안 자동 생성**
+    * **교사용**: 수행평가 루브릭 관리 ➡️ 학급별 제출 현황 대시보드 확인 ➡️ 2022 개정 교육과정 기반 **AI 세특 초안 자동 생성**
     """)
 
 elif st.session_state.user_role == "student":
@@ -227,8 +218,8 @@ elif st.session_state.user_role == "student":
                 if not user_input_text.strip():
                     st.warning("내용을 먼저 작성해 주세요.")
                 else:
-                    with st.spinner("AI가 루브릭에 맞춰 분석 중입니다..."):
-                        ai_result = call_ai_grading(user_input_text, current_rubric, os.environ.get("OPENAI_API_KEY"))
+                    with st.spinner("Gemini AI가 루브릭에 맞춰 분석 중입니다..."):
+                        ai_result = call_ai_grading(user_input_text, current_rubric, api_key_input)
                         sub_data["draft"] = user_input_text
                         sub_data["score"] = ai_result.get("score", 0)
                         sub_data["deduction"] = ai_result.get("deduction", "")
@@ -240,7 +231,7 @@ elif st.session_state.user_role == "student":
                 if not user_input_text.strip():
                     st.error("내용이 비어있습니다.")
                 else:
-                    ai_result = call_ai_grading(user_input_text, current_rubric, os.environ.get("OPENAI_API_KEY"))
+                    ai_result = call_ai_grading(user_input_text, current_rubric, api_key_input)
                     sub_data["draft"] = user_input_text
                     sub_data["score"] = ai_result.get("score", 0)
                     sub_data["deduction"] = ai_result.get("deduction", "")
@@ -345,12 +336,12 @@ elif st.session_state.user_role == "teacher":
             with col_w2:
                 st.markdown("**[2022 개정 교육과정 기반 세특 초안 생성]**")
                 if st.button("✨ 학생 원문 기반 세특 초안 자동 생성", type="primary", use_container_width=True):
-                    with st.spinner("세특 초안을 생성 중입니다..."):
+                    with st.spinner("Gemini가 세특 초안을 생성 중입니다..."):
                         generated_text = call_ai_seteuk(
                             student_work["draft"],
                             student_work.get("score", 0),
                             selected_assess_s,
-                            os.environ.get("OPENAI_API_KEY")
+                            api_key_input
                         )
                         student_work["se-teuk"] = generated_text
                         st.rerun()
@@ -364,13 +355,4 @@ elif st.session_state.user_role == "teacher":
                 if st.button("💾 세특 수정사항 저장"):
                     student_work["se-teuk"] = edited_seteuk
                     st.success("세특 내용이 저장되었습니다!")
-```스트림릿(Streamlit)으로 구현하기에 아주 직관적이고 좋은 선택입니다. 구상하고 계신 앱의 핵심 기능이 무엇인지 알려주시면 바로 코드를 짜드릴 수 있습니다. 
 
-혹시 아래와 같은 형태라면 말씀해 주세요. 즉시 기본 코드(`app.py`)를 만들어 드립니다.
-
-* **사료 분석 및 OPCVL 검증 도구**: 원문 텍스트를 넣고 출처·목적·가치·한계를 구조화해서 분석·기록하는 인터랙티브 페이지
-* **수행평가 채점 및 세특(세부능력 및 특기사항) 초안 생성기**: 학생별 평가 항목을 체크하면 문장이 조합되어 나오는 보조 툴
-* **역사·사회 데이터 시각화 대시보드**: 특정 시계열 데이터(예: 1970년대 경제·사회 지표 등)를 그래프로 보여주고탐구 질문을 던지는 페이지
-* **질문 중심 탐구 활동 보드**: 학생들이 실시간으로 질문을 입력하고 키워드별로 분류·공유할 수 있는 소형 웹진 형태의 게시판
-
-어떤 목적의 앱인지 편하게 말씀해 주세요. 필요한 라이브러리(`pandas`, `plotly`, `streamlit` 등)와 함께 바로 복사해서 쓸 수 있는 코드를 작성해 드리겠습니다.
