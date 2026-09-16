@@ -116,8 +116,8 @@ def call_ai_grading(student_text, rubric_text, api_key=None):
     
     try:
         genai.configure(api_key=api_key)
-        # ⚠️ 최신 표준 모델인 'gemini-2.0-flash' 적용
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        # ⚠️ 에러 안내에 맞춘 'gemini-2.5-flash' 적용
+        model = genai.GenerativeModel("gemini-2.5-flash")
         response = model.generate_content(prompt)
         content = response.text.strip()
         
@@ -155,8 +155,8 @@ def call_ai_seteuk(student_text, score, assessment_name, api_key=None):
 
     try:
         genai.configure(api_key=api_key)
-        # ⚠️ 최신 표준 모델인 'gemini-2.0-flash' 적용
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        # ⚠️ 에러 안내에 맞춘 'gemini-2.5-flash' 적용
+        model = genai.GenerativeModel("gemini-2.5-flash")
         response = model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
