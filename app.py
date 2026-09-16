@@ -125,4 +125,4 @@ def call_ai_seteuk(student_text, score, assessment_name, api_key=None):
 
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini--2.5-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
