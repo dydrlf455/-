@@ -90,6 +90,39 @@ def call_ai_grading(student_text, rubric_text, api_key=None):
         response = model.generate_content(prompt)
         content = response.text.strip()
         
-        if content.startswith("```json"):
+        # ⚠️ 복사 오류(SyntaxError)를 막기 위해 백틱(`)을 문자열 곱셈으로 우회 처리
+        backticks = "`" * 3
+        if content.startswith(f"{backticks}json"):
             content = content[7:-3].strip()
-        elif content.startswith("
+        elif content.startswith(backticks):
+            content = content[3:-3].strip()
+            
+        return json.loads(content)
+    except Exception as e:
+        return {
+            "score": 0.0,
+            "deduction": f"AI 분석 중 오류 발생: {str(e)}",
+            "comment": "API 키를 확인하거나 잠시 후 다시 시도해 주세요.",
+            "is_mock": True
+        }
+
+def call_ai_seteuk(student_text, score, assessment_name, api_key=None):
+    prompt = f"""
+당신은 고등학교 역사 교사입니다. 2022 개정 교육과정 역사과 성취기준 및 핵심 역량(역사적 사고력, 역사적 탐구 및 소통력 등)을 바탕으로 아래 학생의 세부능력 및 특기사항(세특) 초안을 작성해 주세요.
+
+[절대 규칙 - 환각 배제]
+1. 아래 제공된 [학생 원문 내용]에 명시적으로 드러난 사실, 역사적 개념, 탐구 내용만을 기반으로 작성할 것.
+2. 학생 원문에 없는 내용은 절대 지어내지 말 것.
+3. 분량은 학교생활기록부 기재 요령에 맞게 500바이트 내외(3~5문장)로 간결하게 서술할 것.
+
+[수행평가명]: {assessment_name}
+[획득 점수]: {score}점
+[학생 원문 내용]:
+{student_text}
+"""
+    if not GENAI_AVAILABLE or not api_key:
+        return f"[모의 세특 생성 결과] ({assessment_name} / {score}점 기반)\n수행평가 과정에서 해당 역사적 주제에 대한 뛰어난 탐구력과 균형 잡힌 시각을 보여줌. 역사적 사실을 정확하게 이해하고 논리적으로 서술하는 역량이 우수함."
+
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-
