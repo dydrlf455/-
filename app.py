@@ -71,11 +71,29 @@ def call_ai_grading(student_text, rubric_text, api_key=None):
   "comment": "(학생에게 건네는 격려 및 보완 가이드 코멘트)"
 }}
 """
-  if not GENAI_AVAILABLE or not api_key:
+    if not GENAI_AVAILABLE or not api_key:
         return {
             "score": 8.0,
             "deduction": "1970년대 구체적인 사건이나 법적 제도적 한계에 대한 언급이 조금 더 구체적이면 좋습니다.",
             "comment": "전반적인 흐름 이해가 훌륭합니다. 구체적 사료나 사례를 한 가지만 더 추가해 보세요!",
+            "is_mock": True
+        }
+    
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        response = model.generate_content(prompt)
+        content = response.text.strip()
+        if content.startswith("```json"):
+            content = content[7:-3].strip()
+        elif content.startswith("```"):
+            content = content[3:-3].strip()
+        return json.loads(content)
+    except Exception as e:
+        return {
+            "score": 0.0,
+            "deduction": f"AI 분석 중 오류 발생: {str(e)}",
+            "comment": "API 키를 확인하거나 잠시 후 다시 시도해 주세요.",
             "is_mock": True
         }
     
