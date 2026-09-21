@@ -124,13 +124,12 @@ def call_ai_grading(student_text, structured_rubric, api_key=None):
         response = model.generate_content(prompt)
         content = response.text.strip()
         
-        backticks = "`" * 3
-        if content.startswith(f"{backticks}json"):
-            content = content[7:-3].strip()
-        elif content.startswith(backticks):
-            content = content[3:-3].strip()
-            
-        return json.loads(content)
+        start_idx = content.find('{')
+        end_idx = content.rfind('}')
+        if start_idx != -1 and end_idx != -1:
+            json_str = content[start_idx:end_idx+1]
+            return json.loads(json_str)
+        return {"score": 0, "item_deductions": "JSON 포맷 추출 실패", "comment": "다시 시도해 주세요."}
     except Exception as e:
         return {
             "score": 0.0,
@@ -142,7 +141,7 @@ def call_ai_grading(student_text, structured_rubric, api_key=None):
 def call_ai_rubric_parser(raw_text, api_key=None):
     prompt = f"""
 다음은 고등학교 역사 과목 수행평가 채점 기준(루브릭) 문서 내용입니다.
-이 내용을 분석하여 반드시 아래 JSON 구조로만 출력해 주세요. 마크다운 기호(```json) 없이 순수 JSON 텍스트만 반환하세요.
+이 내용을 분석하여 반드시 아래 JSON 구조로만 출력해 주세요. 마크다운 기호 없이 오직 JSON 형태의 텍스트만 출력해야 합니다.
 배점이 높은 순서대로 '심화', '기본', '기초'에 내용을 매핑하세요.
 
 [출력 JSON 포맷]
@@ -163,9 +162,9 @@ def call_ai_rubric_parser(raw_text, api_key=None):
         "element_name": "평가요소 파악 실패",
         "dimension": "지식·이해",
         "levels": {
-            "advanced": raw_text[:50] + "...",
-            "basic": "중간 수준 기준을 직접 입력하세요.",
-            "beginner": "기초 수준 기준을 직접 입력하세요."
+            "advanced": "내용을 자동으로 분석하지 못했습니다. 직접 입력해 주세요.",
+            "basic": "내용을 직접 입력해 주세요.",
+            "beginner": "내용을 직접 입력해 주세요."
         }
     }
     
@@ -178,13 +177,19 @@ def call_ai_rubric_parser(raw_text, api_key=None):
         response = model.generate_content(prompt)
         content = response.text.strip()
         
-        if content.startswith("```json"):
-            content = content[7:-3].strip()
-        elif content.startswith("```"):
-            content = content[3:-3].strip()
+        # 안전한 JSON 추출 로직 (불필요한 텍스트 섞임 방지)
+        start_idx = content.find('{')
+        end_idx = content.rfind('}')
+        
+        if start_idx != -1 and end_idx != -1:
+            json_str = content[start_idx:end_idx+1]
+            parsed_json = json.loads(json_str)
             
-        parsed_json = json.loads(content)
-        return parsed_json
+            # 딕셔너리(객체) 타입인지 검증
+            if isinstance(parsed_json, dict):
+                return parsed_json
+                
+        return default_mock
     except:
         return default_mock
 
@@ -274,7 +279,7 @@ if not st.session_state.logged_in:
     st.info("👈 왼쪽 사이드바에서 로그인을 진행해 주세요.")
 
 # ------------------------------------------
-# 1. 관리자(Admin) 모드 (생략 없이 유지)
+# 1. 관리자(Admin) 모드
 # ------------------------------------------
 elif st.session_state.user_role == "admin":
     st.title("👑 최고 관리자 대시보드")
@@ -327,11 +332,11 @@ elif st.session_state.user_role == "student":
         current_rubric = st.session_state.assessments[selected_assess].get("structured_rubric", {})
         
         with st.expander("📌 [필독] 이번 수행평가 채점 기준", expanded=True):
-            if current_rubric:
+            if current_rubric and isinstance(current_rubric, dict):
                 st.markdown(f"**평가 요소:** {current_rubric.get('element_name', '')} ({current_rubric.get('dimension', '')})")
-                st.markdown(f"- **심화:** {current_rubric['levels'].get('advanced', '')}")
-                st.markdown(f"- **기본:** {current_rubric['levels'].get('basic', '')}")
-                st.markdown(f"- **기초:** {current_rubric['levels'].get('beginner', '')}")
+                st.markdown(f"- **심화:** {current_rubric.get('levels', {}).get('advanced', '')}")
+                st.markdown(f"- **기본:** {current_rubric.get('levels', {}).get('basic', '')}")
+                st.markdown(f"- **기초:** {current_rubric.get('levels', {}).get('beginner', '')}")
             else:
                 st.markdown("루브릭 정보가 없습니다.")
         
@@ -372,7 +377,7 @@ elif st.session_state.user_role == "student":
                 st.success(f"코멘트:\n{sub_data['comment']}")
 
 # ------------------------------------------
-# 3. 교사(Teacher) 모드 (UI 개편 핵심 적용)
+# 3. 교사(Teacher) 모드
 # ------------------------------------------
 elif st.session_state.user_role == "teacher":
     st.title("👩‍🏫 교사용 대시보드")
@@ -386,7 +391,8 @@ elif st.session_state.user_role == "teacher":
     with tab_management:
         st.subheader("📁 수행평가 및 루브릭 등록")
         
-        if "structured_rubric" not in st.session_state:
+        # 방어 코드: structured_rubric이 손상되었거나 딕셔너리가 아닌 경우 초기화
+        if "structured_rubric" not in st.session_state or not isinstance(st.session_state.structured_rubric, dict):
             st.session_state.structured_rubric = {
                 "element_name": "",
                 "dimension": "과정·기능",
@@ -404,8 +410,13 @@ elif st.session_state.user_role == "teacher":
                     if extracted_text.strip():
                         with st.spinner("AI가 PDF를 분석하여 구조화된 UI를 생성 중입니다..."):
                             parsed_json = call_ai_rubric_parser(extracted_text.strip(), os.environ.get("GEMINI_API_KEY"))
-                            st.session_state.structured_rubric = parsed_json
-                        st.success("PDF 루브릭 추출 완료! 아래 카드 UI에 반영되었습니다.")
+                            
+                            # 파싱된 데이터가 유효한 딕셔너리일 때만 업데이트
+                            if isinstance(parsed_json, dict):
+                                st.session_state.structured_rubric = parsed_json
+                                st.success("PDF 루브릭 추출 완료! 아래 카드 UI에 반영되었습니다.")
+                            else:
+                                st.warning("AI 데이터 구조화에 실패했습니다. 직접 입력해 주세요.")
                 except Exception as e:
                     st.error(f"PDF 읽기 오류: {str(e)}")
             else:
@@ -413,7 +424,11 @@ elif st.session_state.user_role == "teacher":
 
         st.markdown("---")
         
-        # [스크린샷 기반 구조화된 UI 렌더링]
+        # UI 렌더링 시에도 안전한 .get() 사용 보장
+        rubric_data = st.session_state.structured_rubric
+        if not isinstance(rubric_data, dict):
+            rubric_data = {"element_name": "", "dimension": "과정·기능", "levels": {}}
+
         with st.form("new_assessment_form"):
             new_title = st.text_input("수행평가명 (제목)", placeholder="예: 5·18 민주 운동 서술")
             new_max_score = st.number_input("이 과제의 만점 배점", min_value=1, max_value=100, value=10)
@@ -422,27 +437,31 @@ elif st.session_state.user_role == "teacher":
             with st.container(border=True):
                 c1, c2 = st.columns([2, 1])
                 with c1:
-                    rubric_elem = st.text_input("평가 요소", value=st.session_state.structured_rubric.get("element_name", ""))
+                    rubric_elem = st.text_input("평가 요소", value=rubric_data.get("element_name", ""))
                 with c2:
                     dimensions = ["지식·이해", "과정·기능", "가치·태도"]
-                    current_dim = st.session_state.structured_rubric.get("dimension", "과정·기능")
+                    current_dim = rubric_data.get("dimension", "과정·기능")
                     if current_dim not in dimensions:
                         current_dim = "과정·기능"
                     rubric_dim = st.radio("차원", dimensions, index=dimensions.index(current_dim), horizontal=True)
 
                 st.markdown("---")
                 
+                levels_data = rubric_data.get("levels", {})
+                if not isinstance(levels_data, dict):
+                    levels_data = {"advanced": "", "basic": "", "beginner": ""}
+
                 c_level1, c_text1 = st.columns([1, 6])
                 with c_level1: st.markdown("<br>**심화**", unsafe_allow_html=True)
-                with c_text1: rub_adv = st.text_area("심화 기준", value=st.session_state.structured_rubric.get("levels", {}).get("advanced", ""), label_visibility="collapsed")
+                with c_text1: rub_adv = st.text_area("심화 기준", value=levels_data.get("advanced", ""), label_visibility="collapsed")
                 
                 c_level2, c_text2 = st.columns([1, 6])
                 with c_level2: st.markdown("<br>**기본**", unsafe_allow_html=True)
-                with c_text2: rub_bas = st.text_area("기본 기준", value=st.session_state.structured_rubric.get("levels", {}).get("basic", ""), label_visibility="collapsed")
+                with c_text2: rub_bas = st.text_area("기본 기준", value=levels_data.get("basic", ""), label_visibility="collapsed")
                 
                 c_level3, c_text3 = st.columns([1, 6])
                 with c_level3: st.markdown("<br>**기초**", unsafe_allow_html=True)
-                with c_text3: rub_beg = st.text_area("기초 기준", value=st.session_state.structured_rubric.get("levels", {}).get("beginner", ""), label_visibility="collapsed")
+                with c_text3: rub_beg = st.text_area("기초 기준", value=levels_data.get("beginner", ""), label_visibility="collapsed")
             
             submitted_new = st.form_submit_button("수행평가 최종 등록", type="primary")
             
