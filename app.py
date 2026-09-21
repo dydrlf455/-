@@ -89,6 +89,21 @@ else:
     save_data()
 
 # ==========================================
+# [강력한 세션 상태 초기화 및 안전 가드]
+# ==========================================
+def get_safe_rubric():
+    """세션에 찌꺼기 문자열이 남아있어도 딕셔너리로 강제 복구하는 함수"""
+    raw_rubric = st.session_state.get("structured_rubric", {})
+    if isinstance(raw_rubric, dict) and "element_name" in raw_rubric:
+        return raw_rubric
+    # 데이터가 꼬였을 경우 기본형식 반환
+    return {
+        "element_name": "",
+        "dimension": "과정·기능",
+        "levels": {"advanced": "", "basic": "", "beginner": ""}
+    }
+
+# ==========================================
 # [구글 Gemini AI 연동 함수 정의]
 # ==========================================
 def call_ai_grading(student_text, structured_rubric, api_key=None):
@@ -141,8 +156,7 @@ def call_ai_grading(student_text, structured_rubric, api_key=None):
 def call_ai_rubric_parser(raw_text, api_key=None):
     prompt = f"""
 다음은 고등학교 역사 과목 수행평가 채점 기준(루브릭) 문서 내용입니다.
-이 내용을 분석하여 반드시 아래 JSON 구조로만 출력해 주세요. 마크다운 기호 없이 오직 JSON 형태의 텍스트만 출력해야 합니다.
-배점이 높은 순서대로 '심화', '기본', '기초'에 내용을 매핑하세요.
+이 내용을 분석하여 반드시 아래 JSON 구조로만 출력해 주세요. 부가 설명이나 마크다운(```json) 없이 오직 JSON 중괄호 {{}} 안의 텍스트만 출력하세요.
 
 [출력 JSON 포맷]
 {{
@@ -177,18 +191,14 @@ def call_ai_rubric_parser(raw_text, api_key=None):
         response = model.generate_content(prompt)
         content = response.text.strip()
         
-        # 안전한 JSON 추출 로직 (불필요한 텍스트 섞임 방지)
         start_idx = content.find('{')
         end_idx = content.rfind('}')
         
         if start_idx != -1 and end_idx != -1:
             json_str = content[start_idx:end_idx+1]
             parsed_json = json.loads(json_str)
-            
-            # 딕셔너리(객체) 타입인지 검증
             if isinstance(parsed_json, dict):
                 return parsed_json
-                
         return default_mock
     except:
         return default_mock
@@ -390,14 +400,6 @@ elif st.session_state.user_role == "teacher":
 
     with tab_management:
         st.subheader("📁 수행평가 및 루브릭 등록")
-        
-        # 방어 코드: structured_rubric이 손상되었거나 딕셔너리가 아닌 경우 초기화
-        if "structured_rubric" not in st.session_state or not isinstance(st.session_state.structured_rubric, dict):
-            st.session_state.structured_rubric = {
-                "element_name": "",
-                "dimension": "과정·기능",
-                "levels": {"advanced": "", "basic": "", "beginner": ""}
-            }
 
         uploaded_pdf = st.file_uploader("채점 기준 PDF 파일 업로드 (자동 채워짐)", type=["pdf"])
         
@@ -411,12 +413,12 @@ elif st.session_state.user_role == "teacher":
                         with st.spinner("AI가 PDF를 분석하여 구조화된 UI를 생성 중입니다..."):
                             parsed_json = call_ai_rubric_parser(extracted_text.strip(), os.environ.get("GEMINI_API_KEY"))
                             
-                            # 파싱된 데이터가 유효한 딕셔너리일 때만 업데이트
-                            if isinstance(parsed_json, dict):
+                            # 딕셔너리로 확실하게 검증된 값만 세션에 저장
+                            if isinstance(parsed_json, dict) and "element_name" in parsed_json:
                                 st.session_state.structured_rubric = parsed_json
                                 st.success("PDF 루브릭 추출 완료! 아래 카드 UI에 반영되었습니다.")
                             else:
-                                st.warning("AI 데이터 구조화에 실패했습니다. 직접 입력해 주세요.")
+                                st.warning("AI 분석 결과 형식이 맞지 않습니다. 직접 입력해 주세요.")
                 except Exception as e:
                     st.error(f"PDF 읽기 오류: {str(e)}")
             else:
@@ -424,10 +426,8 @@ elif st.session_state.user_role == "teacher":
 
         st.markdown("---")
         
-        # UI 렌더링 시에도 안전한 .get() 사용 보장
-        rubric_data = st.session_state.structured_rubric
-        if not isinstance(rubric_data, dict):
-            rubric_data = {"element_name": "", "dimension": "과정·기능", "levels": {}}
+        # 📌 핵심 오류 해결 부분: 오류 발생을 원천 차단하는 완전 분리형 변수 사용
+        safe_rubric = get_safe_rubric()
 
         with st.form("new_assessment_form"):
             new_title = st.text_input("수행평가명 (제목)", placeholder="예: 5·18 민주 운동 서술")
@@ -437,17 +437,18 @@ elif st.session_state.user_role == "teacher":
             with st.container(border=True):
                 c1, c2 = st.columns([2, 1])
                 with c1:
-                    rubric_elem = st.text_input("평가 요소", value=rubric_data.get("element_name", ""))
+                    rubric_elem = st.text_input("평가 요소", value=safe_rubric.get("element_name", ""))
                 with c2:
                     dimensions = ["지식·이해", "과정·기능", "가치·태도"]
-                    current_dim = rubric_data.get("dimension", "과정·기능")
+                    current_dim = safe_rubric.get("dimension", "과정·기능")
                     if current_dim not in dimensions:
                         current_dim = "과정·기능"
                     rubric_dim = st.radio("차원", dimensions, index=dimensions.index(current_dim), horizontal=True)
 
                 st.markdown("---")
                 
-                levels_data = rubric_data.get("levels", {})
+                # levels 딕셔너리 안전 접근
+                levels_data = safe_rubric.get("levels", {})
                 if not isinstance(levels_data, dict):
                     levels_data = {"advanced": "", "basic": "", "beginner": ""}
 
@@ -479,6 +480,7 @@ elif st.session_state.user_role == "teacher":
                         },
                         "max_score": new_max_score
                     }
+                    st.session_state.structured_rubric = get_safe_rubric() # 폼 등록 후 초기화
                     save_data()
                     st.success(f"'{new_title}' 수행평가가 구조화된 루브릭과 함께 등록되었습니다!")
                     st.rerun()
